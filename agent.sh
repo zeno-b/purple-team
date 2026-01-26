@@ -504,7 +504,7 @@ phase_account_discovery() {
     
     # List members of local Administrators group
     execute_powershell \
-        "Get-LocalGroupMember -Group 'Administrators' 2>`$null" \
+        "Get-LocalGroupMember -Group 'Administrators' 2>\$null" \
         "T1087.001" \
         "Enumerating local administrators"
     
@@ -919,7 +919,7 @@ phase_ransomware_behavior() {
     ((TOTAL_ACTIONS++))
     
     local ransom_note="/tmp/RANSOMWARE_NOTE_PURPLETEAM.txt"
-    cat > "$ransom_note" << 'EOF'
+    cat > "$ransom_note" <<'RANSOMNOTE'
 ╔══════════════════════════════════════════════════════════════╗
 ║          PURPLE TEAM EXERCISE INDICATOR                      ║
 ║             RANSOMWARE NOTE SIMULATION                       ║
@@ -947,7 +947,7 @@ MITRE ATT&CK Technique: T1486 (Data Encrypted for Impact)
 Purple Team Exercise Timestamp: $(date '+%Y-%m-%d %H:%M:%S')
 
 For questions about this exercise, contact your security team.
-EOF
+RANSOMNOTE
     
     if [ -f "$ransom_note" ]; then
         print_success "Ransom note indicator created at $ransom_note" "T1486"
@@ -1389,4 +1389,3 @@ trap 'print_error "Script interrupted by user"; generate_summary; exit 1' INT TE
 
 main "$@"
 exit 0
-
