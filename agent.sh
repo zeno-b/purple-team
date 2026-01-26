@@ -52,132 +52,132 @@ POWERSHELL_CMD=""
 # ============================================================================
 
 show_help() {
-    cat << EOF
-${C_CYAN}
+    echo -e "${C_CYAN}"
+    cat << "EOF"
 ╔══════════════════════════════════════════════════════════════════════════╗
-║                     PURPLE TEAM AGENT v${SCRIPT_VERSION}                           ║
+║                     PURPLE TEAM AGENT v3.0                               ║
 ║              WSL to Windows Host Red Team Simulation                     ║
 ╚══════════════════════════════════════════════════════════════════════════╝
-${C_RESET}
-
-${C_WHITE}USAGE:${C_RESET}
-    $0 [OPTIONS]
-
-${C_WHITE}OPTIONS:${C_RESET}
-    ${C_GREEN}-h, --help${C_RESET}              Show this help message
-    ${C_GREEN}-a, --all${C_RESET}               Run all phases (default)
-    ${C_GREEN}-p, --phase <number>${C_RESET}    Run a specific phase (1-11)
-    ${C_GREEN}-l, --list${C_RESET}              List all available phases
-    ${C_GREEN}-q, --quiet${C_RESET}             Minimal output (logs only)
-    ${C_GREEN}-v, --verbose${C_RESET}           Verbose output with details
-
-${C_WHITE}PHASES:${C_RESET}
-    ${C_CYAN}Phase 1${C_RESET}  - System Information Discovery (T1082)
-    ${C_CYAN}Phase 2${C_RESET}  - Account Discovery (T1087)
-    ${C_CYAN}Phase 3${C_RESET}  - Process Discovery (T1057)
-    ${C_CYAN}Phase 4${C_RESET}  - File and Directory Discovery (T1083)
-    ${C_CYAN}Phase 5${C_RESET}  - Credential Search (T1552.001)
-    ${C_CYAN}Phase 6${C_RESET}  - Registry Enumeration (T1012, T1518)
-    ${C_CYAN}Phase 7${C_RESET}  - Network Discovery (T1049, T1018, T1135)
-    ${C_CYAN}Phase 8${C_RESET}  - Automated Collection (T1119)
-    ${C_CYAN}Phase 9${C_RESET}  - Persistence Reconnaissance (T1547, T1053)
-    ${C_CYAN}Phase 10${C_RESET} - Ransomware-like Behavior (T1486, T1490, T1489)
-    ${C_CYAN}Phase 11${C_RESET} - EICAR AV Detection Test
-
-${C_WHITE}EXAMPLES:${C_RESET}
-    # Run all phases
-    $0 --all
-
-    # Run only phase 1
-    $0 --phase 1
-
-    # Run phases 1, 5, and 11
-    $0 --phase 1,5,11
-
-    # List all phases
-    $0 --list
-
-${C_WHITE}OUTPUT:${C_RESET}
-    ${C_YELLOW}Screen:${C_RESET}      Color-coded real-time output
-    ${C_YELLOW}Text Log:${C_RESET}    Professional formatted log at ${LOG_FILE}
-    ${C_YELLOW}JSON Log:${C_RESET}    Machine-readable log at ${JSON_LOG}
-
-${C_WHITE}NOTES:${C_RESET}
-    - This script is for authorized purple team exercises only
-    - All actions are logged for blue team analysis
-    - EICAR test files are safe and standard for AV testing
-    - Ransomware phase performs reconnaissance only (no encryption)
-
 EOF
+    echo -e "${C_RESET}"
+    echo ""
+    echo -e "${C_WHITE}USAGE:${C_RESET}"
+    echo "    $0 [OPTIONS]"
+    echo ""
+    echo -e "${C_WHITE}OPTIONS:${C_RESET}"
+    echo -e "    ${C_GREEN}-h, --help${C_RESET}              Show this help message"
+    echo -e "    ${C_GREEN}-a, --all${C_RESET}               Run all phases (default)"
+    echo -e "    ${C_GREEN}-p, --phase <number>${C_RESET}    Run a specific phase (1-11)"
+    echo -e "    ${C_GREEN}-l, --list${C_RESET}              List all available phases"
+    echo -e "    ${C_GREEN}-q, --quiet${C_RESET}             Minimal output (logs only)"
+    echo -e "    ${C_GREEN}-v, --verbose${C_RESET}           Verbose output with details"
+    echo ""
+    echo -e "${C_WHITE}PHASES:${C_RESET}"
+    echo -e "    ${C_CYAN}Phase 1${C_RESET}  - System Information Discovery (T1082)"
+    echo -e "    ${C_CYAN}Phase 2${C_RESET}  - Account Discovery (T1087)"
+    echo -e "    ${C_CYAN}Phase 3${C_RESET}  - Process Discovery (T1057)"
+    echo -e "    ${C_CYAN}Phase 4${C_RESET}  - File and Directory Discovery (T1083)"
+    echo -e "    ${C_CYAN}Phase 5${C_RESET}  - Credential Search (T1552.001)"
+    echo -e "    ${C_CYAN}Phase 6${C_RESET}  - Registry Enumeration (T1012, T1518)"
+    echo -e "    ${C_CYAN}Phase 7${C_RESET}  - Network Discovery (T1049, T1018, T1135)"
+    echo -e "    ${C_CYAN}Phase 8${C_RESET}  - Automated Collection (T1119)"
+    echo -e "    ${C_CYAN}Phase 9${C_RESET}  - Persistence Reconnaissance (T1547, T1053)"
+    echo -e "    ${C_CYAN}Phase 10${C_RESET} - Ransomware-like Behavior (T1486, T1490, T1489)"
+    echo -e "    ${C_CYAN}Phase 11${C_RESET} - EICAR AV Detection Test"
+    echo ""
+    echo -e "${C_WHITE}EXAMPLES:${C_RESET}"
+    echo "    # Run all phases"
+    echo "    $0 --all"
+    echo ""
+    echo "    # Run only phase 1"
+    echo "    $0 --phase 1"
+    echo ""
+    echo "    # Run phases 1, 5, and 11"
+    echo "    $0 --phase 1,5,11"
+    echo ""
+    echo "    # List all phases"
+    echo "    $0 --list"
+    echo ""
+    echo -e "${C_WHITE}OUTPUT:${C_RESET}"
+    echo -e "    ${C_YELLOW}Screen:${C_RESET}      Color-coded real-time output"
+    echo -e "    ${C_YELLOW}Text Log:${C_RESET}    Professional formatted log"
+    echo -e "    ${C_YELLOW}JSON Log:${C_RESET}    Machine-readable log"
+    echo ""
+    echo -e "${C_WHITE}NOTES:${C_RESET}"
+    echo "    - This script is for authorized purple team exercises only"
+    echo "    - All actions are logged for blue team analysis"
+    echo "    - EICAR test files are safe and standard for AV testing"
+    echo "    - Ransomware phase performs reconnaissance only (no encryption)"
+    echo ""
 }
 
 list_phases() {
-    cat << EOF
-${C_CYAN}
+    echo -e "${C_CYAN}"
+    cat << "EOF"
 ╔══════════════════════════════════════════════════════════════════════════╗
 ║                        AVAILABLE PHASES                                  ║
 ╚══════════════════════════════════════════════════════════════════════════╝
-${C_RESET}
-
-${C_WHITE}[1]${C_RESET}  ${C_GREEN}System Information Discovery${C_RESET}
-     MITRE ATT&CK: T1082
-     Description: Enumerate OS version, patches, security products
-     Duration: ~15 seconds
-
-${C_WHITE}[2]${C_RESET}  ${C_GREEN}Account Discovery${C_RESET}
-     MITRE ATT&CK: T1087.001, T1087.002
-     Description: List local users, groups, and privileges
-     Duration: ~20 seconds
-
-${C_WHITE}[3]${C_RESET}  ${C_GREEN}Process Discovery${C_RESET}
-     MITRE ATT&CK: T1057, T1007
-     Description: Enumerate running processes and services
-     Duration: ~15 seconds
-
-${C_WHITE}[4]${C_RESET}  ${C_GREEN}File and Directory Discovery${C_RESET}
-     MITRE ATT&CK: T1083
-     Description: Search for sensitive files and directories
-     Duration: ~25 seconds
-
-${C_WHITE}[5]${C_RESET}  ${C_GREEN}Credential Search${C_RESET}
-     MITRE ATT&CK: T1552.001, T1555.003
-     Description: Hunt for passwords and credential stores
-     Duration: ~30 seconds
-
-${C_WHITE}[6]${C_RESET}  ${C_GREEN}Registry Enumeration${C_RESET}
-     MITRE ATT&CK: T1012, T1518
-     Description: Query registry for software and persistence
-     Duration: ~20 seconds
-
-${C_WHITE}[7]${C_RESET}  ${C_GREEN}Network Discovery${C_RESET}
-     MITRE ATT&CK: T1049, T1018, T1135, T1016
-     Description: Map network topology and connections
-     Duration: ~25 seconds
-
-${C_WHITE}[8]${C_RESET}  ${C_GREEN}Automated Collection${C_RESET}
-     MITRE ATT&CK: T1119
-     Description: Collect files for exfiltration
-     Duration: ~20 seconds
-
-${C_WHITE}[9]${C_RESET}  ${C_GREEN}Persistence Reconnaissance${C_RESET}
-     MITRE ATT&CK: T1547, T1053, T1543
-     Description: Identify persistence mechanisms
-     Duration: ~15 seconds
-
-${C_WHITE}[10]${C_RESET} ${C_MAGENTA}Ransomware-like Behavior${C_RESET}
-     MITRE ATT&CK: T1486, T1490, T1489
-     Description: Simulate ransomware TTPs (no encryption)
-     Duration: ~30 seconds
-     ${C_YELLOW}Note: Creates indicators only, no actual encryption${C_RESET}
-
-${C_WHITE}[11]${C_RESET} ${C_CYAN}EICAR AV Detection Test${C_RESET}
-     Description: Test antivirus detection capabilities
-     Duration: ~20 seconds
-     ${C_YELLOW}Note: Uses safe EICAR test files${C_RESET}
-
-${C_GRAY}Total estimated time for all phases: ~4-5 minutes${C_RESET}
-
 EOF
+    echo -e "${C_RESET}"
+    echo ""
+    echo -e "${C_WHITE}[1]${C_RESET}  ${C_GREEN}System Information Discovery${C_RESET}"
+    echo "     MITRE ATT&CK: T1082"
+    echo "     Description: Enumerate OS version, patches, security products"
+    echo "     Duration: ~15 seconds"
+    echo ""
+    echo -e "${C_WHITE}[2]${C_RESET}  ${C_GREEN}Account Discovery${C_RESET}"
+    echo "     MITRE ATT&CK: T1087.001, T1087.002"
+    echo "     Description: List local users, groups, and privileges"
+    echo "     Duration: ~20 seconds"
+    echo ""
+    echo -e "${C_WHITE}[3]${C_RESET}  ${C_GREEN}Process Discovery${C_RESET}"
+    echo "     MITRE ATT&CK: T1057, T1007"
+    echo "     Description: Enumerate running processes and services"
+    echo "     Duration: ~15 seconds"
+    echo ""
+    echo -e "${C_WHITE}[4]${C_RESET}  ${C_GREEN}File and Directory Discovery${C_RESET}"
+    echo "     MITRE ATT&CK: T1083"
+    echo "     Description: Search for sensitive files and directories"
+    echo "     Duration: ~25 seconds"
+    echo ""
+    echo -e "${C_WHITE}[5]${C_RESET}  ${C_GREEN}Credential Search${C_RESET}"
+    echo "     MITRE ATT&CK: T1552.001, T1555.003"
+    echo "     Description: Hunt for passwords and credential stores"
+    echo "     Duration: ~30 seconds"
+    echo ""
+    echo -e "${C_WHITE}[6]${C_RESET}  ${C_GREEN}Registry Enumeration${C_RESET}"
+    echo "     MITRE ATT&CK: T1012, T1518"
+    echo "     Description: Query registry for software and persistence"
+    echo "     Duration: ~20 seconds"
+    echo ""
+    echo -e "${C_WHITE}[7]${C_RESET}  ${C_GREEN}Network Discovery${C_RESET}"
+    echo "     MITRE ATT&CK: T1049, T1018, T1135, T1016"
+    echo "     Description: Map network topology and connections"
+    echo "     Duration: ~25 seconds"
+    echo ""
+    echo -e "${C_WHITE}[8]${C_RESET}  ${C_GREEN}Automated Collection${C_RESET}"
+    echo "     MITRE ATT&CK: T1119"
+    echo "     Description: Collect files for exfiltration"
+    echo "     Duration: ~20 seconds"
+    echo ""
+    echo -e "${C_WHITE}[9]${C_RESET}  ${C_GREEN}Persistence Reconnaissance${C_RESET}"
+    echo "     MITRE ATT&CK: T1547, T1053, T1543"
+    echo "     Description: Identify persistence mechanisms"
+    echo "     Duration: ~15 seconds"
+    echo ""
+    echo -e "${C_WHITE}[10]${C_RESET} ${C_MAGENTA}Ransomware-like Behavior${C_RESET}"
+    echo "     MITRE ATT&CK: T1486, T1490, T1489"
+    echo "     Description: Simulate ransomware TTPs (no encryption)"
+    echo "     Duration: ~30 seconds"
+    echo -e "     ${C_YELLOW}Note: Creates indicators only, no actual encryption${C_RESET}"
+    echo ""
+    echo -e "${C_WHITE}[11]${C_RESET} ${C_CYAN}EICAR AV Detection Test${C_RESET}"
+    echo "     Description: Test antivirus detection capabilities"
+    echo "     Duration: ~20 seconds"
+    echo -e "     ${C_YELLOW}Note: Uses safe EICAR test files${C_RESET}"
+    echo ""
+    echo -e "${C_GRAY}Total estimated time for all phases: ~4-5 minutes${C_RESET}"
+    echo ""
 }
 
 # ============================================================================
