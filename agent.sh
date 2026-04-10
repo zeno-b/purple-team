@@ -14,9 +14,15 @@ set -o pipefail
 # CONFIGURATION
 # ============================================================================
 
-readonly SCRIPT_VERSION="4.0"
+readonly SCRIPT_VERSION="4.1"
 readonly WINDOWS_SYSTEM="/mnt/c"
 readonly TIMEOUT_SECONDS=30
+
+# Ransomware simulation directory and encryption key
+readonly RANSOM_SIM_DIR="/tmp/purpleteam_ransom_sim"
+readonly RANSOM_KEY="PurpleTeam_Decrypt_Key_2024!"
+readonly RANSOM_EXT=".locked"
+readonly RANSOM_MANIFEST="${RANSOM_SIM_DIR}/.manifest"
 
 # Log paths are set once at startup; declare here, assign in init_logs
 LOG_FILE=""
@@ -1087,16 +1093,351 @@ phase_persistence_recon() {
 }
 
 # ============================================================================
-# PHASE 10: IMPACT SIMULATION (Ransomware / Destructive TTPs)
-# Reconnaissance only — no encryption, no deletion, no harm
+# RANSOMWARE SIMULATION HELPERS
+# Create fake corporate files, encrypt them, and provide decryption
+# All operations happen inside RANSOM_SIM_DIR (/tmp) — never touches real data
+# Uses openssl AES-256-CBC with a fixed key so the operator can always decrypt
+# ============================================================================
+
+create_sample_file() {
+    local filepath="$1" content="$2"
+    printf '%s\n' "$content" > "$filepath"
+}
+
+build_corporate_directory_tree() {
+    local base="$1"
+    print_action "Building simulated corporate directory tree..."
+    ((TOTAL_ACTIONS++))
+
+    local dirs=(
+        "$base/Finance/Q4_Reports"
+        "$base/Finance/Invoices"
+        "$base/Finance/Tax_Records"
+        "$base/HR/Employee_Records"
+        "$base/HR/Payroll"
+        "$base/Legal/Contracts"
+        "$base/Legal/Compliance"
+        "$base/Executive/Board_Minutes"
+        "$base/Executive/Strategy"
+        "$base/IT/Network_Diagrams"
+        "$base/IT/Credentials"
+        "$base/Operations/SOPs"
+    )
+
+    for d in "${dirs[@]}"; do
+        mkdir -p "$d"
+    done
+
+    create_sample_file "$base/Finance/Q4_Reports/quarterly_revenue_2024.csv" \
+"Region,Q1,Q2,Q3,Q4
+North America,12500000,13200000,14100000,15800000
+EMEA,8700000,9100000,9800000,10500000
+APAC,5400000,5900000,6300000,7100000"
+
+    create_sample_file "$base/Finance/Invoices/invoice_8847.txt" \
+"INVOICE #8847
+Vendor: Acme Consulting LLC
+Amount: \$45,000.00
+Due Date: 2024-12-15
+Payment Terms: Net 30
+[PURPLE TEAM SIMULATION FILE]"
+
+    create_sample_file "$base/Finance/Tax_Records/tax_summary_2023.csv" \
+"Category,Amount
+Gross Revenue,98450000
+Operating Expenses,67230000
+Net Income,31220000
+Tax Rate,21%
+Tax Liability,6556200
+[PURPLE TEAM SIMULATION FILE]"
+
+    create_sample_file "$base/HR/Employee_Records/employee_directory.csv" \
+"ID,Name,Department,Title,Salary
+1001,John Smith,Finance,CFO,285000
+1002,Jane Doe,Legal,General Counsel,265000
+1003,Bob Wilson,IT,CISO,245000
+1004,Alice Brown,HR,VP Human Resources,225000
+[PURPLE TEAM SIMULATION FILE]"
+
+    create_sample_file "$base/HR/Payroll/payroll_oct_2024.csv" \
+"Employee,Gross,Federal,State,Net
+John Smith,23750,4987,1662,17101
+Jane Doe,22083,4637,1546,15900
+[PURPLE TEAM SIMULATION FILE]"
+
+    create_sample_file "$base/Legal/Contracts/vendor_agreement_draft.txt" \
+"MASTER SERVICES AGREEMENT — DRAFT
+Between: Organization and SecureVault Technologies
+Value: \$2,400,000 over 36 months
+Effective Date: January 1, 2025
+Confidentiality: Level 3 — Restricted
+[PURPLE TEAM SIMULATION FILE]"
+
+    create_sample_file "$base/Legal/Compliance/audit_findings_2024.txt" \
+"INTERNAL AUDIT REPORT — CONFIDENTIAL
+Finding 1: Insufficient MFA coverage on VPN endpoints
+Finding 2: Service accounts with non-rotating passwords
+Finding 3: Unencrypted PII in staging database
+Remediation deadline: Q1 2025
+[PURPLE TEAM SIMULATION FILE]"
+
+    create_sample_file "$base/Executive/Board_Minutes/board_minutes_sept.txt" \
+"BOARD OF DIRECTORS MEETING MINUTES
+Date: September 15, 2024
+Topic: Q3 Financial Review and M&A Pipeline
+Decision: Approved acquisition target shortlist
+Budget Allocation: \$50M authorized for due diligence
+[PURPLE TEAM SIMULATION FILE]"
+
+    create_sample_file "$base/Executive/Strategy/strategic_plan_2025.txt" \
+"STRATEGIC PLAN 2025 — CONFIDENTIAL
+Priority 1: Cloud migration (AWS/Azure hybrid)
+Priority 2: Regulatory compliance (SOX, GDPR, PCI-DSS)
+Priority 3: Digital banking platform launch
+Capital expenditure budget: \$120M
+[PURPLE TEAM SIMULATION FILE]"
+
+    create_sample_file "$base/IT/Network_Diagrams/network_topology.txt" \
+"NETWORK TOPOLOGY — INTERNAL USE ONLY
+DMZ: 10.0.1.0/24 (web servers, WAF)
+Corporate: 10.0.10.0/24 (workstations)
+Server VLAN: 10.0.20.0/24 (AD, SQL, Exchange)
+Management: 10.0.99.0/24 (jump boxes, SIEM)
+VPN Pool: 172.16.0.0/16
+[PURPLE TEAM SIMULATION FILE]"
+
+    create_sample_file "$base/IT/Credentials/service_accounts.txt" \
+"SERVICE ACCOUNT INVENTORY — HIGHLY CONFIDENTIAL
+svc_backup — Active Directory backup service
+svc_sql_prod — Production SQL Server
+svc_exchange — Exchange mail flow
+NOTE: All passwords stored in CyberArk vault
+[PURPLE TEAM SIMULATION FILE]"
+
+    create_sample_file "$base/Operations/SOPs/incident_response_plan.txt" \
+"INCIDENT RESPONSE PLAN v3.1
+Step 1: Detect and classify (SOC L1)
+Step 2: Contain affected systems (SOC L2)
+Step 3: Eradicate threat (IR team)
+Step 4: Recover and restore (IT ops)
+Step 5: Post-incident review (CISO)
+Ransomware playbook: See Appendix C
+[PURPLE TEAM SIMULATION FILE]"
+
+    local file_count
+    file_count=$(find "$base" -type f ! -name ".*" | wc -l)
+    print_success "Created $file_count sample corporate files across ${#dirs[@]} directories" "T1486"
+    print_detail "Location: $base"
+
+    {
+        printf '    %s Corporate Directory Tree\n' "$B_TL$B_H"
+        find "$base" -type f ! -name ".*" | sort | sed "s|$base/||" | sed "s/^/    $B_V  /"
+        printf '    %s  Total: %d files\n' "$B_V" "$file_count"
+        printf '    %s\n' "$B_BL$B_H"
+    } >> "$LOG_FILE"
+}
+
+encrypt_simulation_files() {
+    local base="$1"
+    print_action "Encrypting files with AES-256-CBC (reversible)..."
+    ((TOTAL_ACTIONS++))
+
+    if ! command -v openssl &>/dev/null; then
+        print_error "openssl not found — cannot perform encryption simulation" "T1486"
+        return 1
+    fi
+
+    local encrypted=0 failed=0
+    : > "$RANSOM_MANIFEST"
+
+    {
+        printf '    %s Encryption Simulation\n' "$B_TL$B_H"
+        printf '    %s  Algorithm: AES-256-CBC (openssl)\n' "$B_V"
+        printf '    %s  Key: %s\n' "$B_V" "$RANSOM_KEY"
+        printf '    %s  Extension: %s\n' "$B_V" "$RANSOM_EXT"
+        printf '    %s\n' "$B_V"
+    } >> "$LOG_FILE"
+
+    while IFS= read -r file; do
+        local rel_path="${file#"$base"/}"
+        if openssl enc -aes-256-cbc -salt -pbkdf2 -in "$file" -out "${file}${RANSOM_EXT}" -pass "pass:${RANSOM_KEY}" 2>/dev/null; then
+            rm -f "$file"
+            printf '%s\n' "$rel_path" >> "$RANSOM_MANIFEST"
+            printf '    %s  [ENCRYPTED] %s → %s%s\n' "$B_V" "$rel_path" "$rel_path" "$RANSOM_EXT" >> "$LOG_FILE"
+            ((encrypted++))
+        else
+            printf '    %s  [FAILED]    %s\n' "$B_V" "$rel_path" >> "$LOG_FILE"
+            ((failed++))
+        fi
+    done < <(find "$base" -type f ! -name ".*" ! -name "*${RANSOM_EXT}" 2>/dev/null)
+
+    {
+        printf '    %s\n' "$B_V"
+        printf '    %s  Encrypted: %d | Failed: %d\n' "$B_V" "$encrypted" "$failed"
+        printf '    %s\n' "$B_BL$B_H"
+    } >> "$LOG_FILE"
+
+    if [ $encrypted -gt 0 ]; then
+        print_success "Encrypted $encrypted files (originals replaced with ${RANSOM_EXT} versions)" "T1486"
+        print_finding "HIGH" "$encrypted files encrypted — decrypt with: $0 --decrypt"
+    else
+        print_error "Encryption simulation failed" "T1486"
+    fi
+}
+
+drop_ransom_notes() {
+    local base="$1"
+    print_action "Dropping ransom notes across directories..."
+    ((TOTAL_ACTIONS++))
+
+    local note_count=0
+    local note_content
+    note_content=$(cat <<'RANSOMNOTE'
+╔══════════════════════════════════════════════════════════════╗
+║              PURPLE TEAM EXERCISE — ENCRYPTED               ║
+║                 RANSOMWARE SIMULATION NOTE                   ║
+╚══════════════════════════════════════════════════════════════╝
+
+  ⚠  YOUR FILES HAVE BEEN ENCRYPTED  ⚠
+
+  All documents in this directory have been encrypted using
+  AES-256-CBC encryption. The originals have been replaced.
+
+  To recover your files, run:
+
+      ./agent.sh --decrypt
+
+  ─── SIMULATION CONTEXT ───
+
+  In a real ransomware attack, this note would demand:
+    • Cryptocurrency payment (BTC/XMR)
+    • Payment within 72 hours or data leak
+    • Double extortion: pay to decrypt AND prevent data leak
+    • Contact via Tor onion site or secure email
+
+  Blue Team Detection Opportunities:
+    ✓ Mass file rename (original → .locked extension)
+    ✓ High disk I/O from rapid encryption
+    ✓ Ransom note creation across multiple directories
+    ✓ Canary file triggers (if honeypot files are in place)
+    ✓ Unusual process tree: WSL → bash → openssl
+
+  MITRE ATT&CK: T1486 (Data Encrypted for Impact)
+
+  THIS IS A PURPLE TEAM EXERCISE — ALL FILES ARE RECOVERABLE
+RANSOMNOTE
+)
+
+    while IFS= read -r dir; do
+        printf '%s\n' "$note_content" > "$dir/!_README_PURPLETEAM_!.txt"
+        ((note_count++))
+    done < <(find "$base" -type d 2>/dev/null)
+
+    if [ $note_count -gt 0 ]; then
+        print_success "Dropped $note_count ransom notes across directory tree" "T1486"
+    else
+        print_error "Failed to create ransom notes" "T1486"
+    fi
+}
+
+decrypt_ransomware_simulation() {
+    printf '%b' "$C_CYAN"
+    cat << "EOF"
+╔══════════════════════════════════════════════════════════════════════════╗
+║               PURPLE TEAM — RANSOMWARE DECRYPTION                        ║
+╚══════════════════════════════════════════════════════════════════════════╝
+EOF
+    printf '%b\n' "$C_RESET"
+
+    if [ ! -d "$RANSOM_SIM_DIR" ]; then
+        printf '%b[✗]%b No ransomware simulation found at %s\n' "$C_RED" "$C_RESET" "$RANSOM_SIM_DIR"
+        printf '    Run the agent with --phase 10 first to create the simulation.\n'
+        exit 1
+    fi
+
+    if [ ! -f "$RANSOM_MANIFEST" ]; then
+        printf '%b[✗]%b Manifest file not found — cannot determine which files to decrypt\n' "$C_RED" "$C_RESET"
+        exit 1
+    fi
+
+    printf '%b[i]%b Decrypting files in %s ...\n' "$C_BLUE" "$C_RESET" "$RANSOM_SIM_DIR"
+
+    local decrypted=0 failed=0
+
+    while IFS= read -r rel_path; do
+        local enc_file="${RANSOM_SIM_DIR}/${rel_path}${RANSOM_EXT}"
+        local out_file="${RANSOM_SIM_DIR}/${rel_path}"
+
+        if [ ! -f "$enc_file" ]; then
+            printf '    %b[!]%b Skip (not found): %s\n' "$C_YELLOW" "$C_RESET" "$rel_path"
+            continue
+        fi
+
+        local out_dir
+        out_dir=$(dirname "$out_file")
+        mkdir -p "$out_dir" 2>/dev/null
+
+        if openssl enc -aes-256-cbc -d -salt -pbkdf2 -in "$enc_file" -out "$out_file" -pass "pass:${RANSOM_KEY}" 2>/dev/null; then
+            rm -f "$enc_file"
+            printf '    %b[✓]%b Decrypted: %s\n' "$C_GREEN" "$C_RESET" "$rel_path"
+            ((decrypted++))
+        else
+            printf '    %b[✗]%b Failed:    %s\n' "$C_RED" "$C_RESET" "$rel_path"
+            ((failed++))
+        fi
+    done < "$RANSOM_MANIFEST"
+
+    # Remove ransom notes
+    find "$RANSOM_SIM_DIR" -name '!_README_PURPLETEAM_!.txt' -delete 2>/dev/null
+
+    printf '\n'
+    printf '%b[✓]%b Decryption complete: %d recovered, %d failed\n' "$C_GREEN" "$C_RESET" "$decrypted" "$failed"
+    printf '%b[i]%b Files restored to: %s\n' "$C_BLUE" "$C_RESET" "$RANSOM_SIM_DIR"
+
+    if [ $failed -eq 0 ] && [ $decrypted -gt 0 ]; then
+        rm -f "$RANSOM_MANIFEST"
+        printf '%b[i]%b Manifest cleared — simulation fully reversed\n\n' "$C_BLUE" "$C_RESET"
+    fi
+}
+
+cleanup_ransomware_simulation() {
+    printf '%b' "$C_CYAN"
+    cat << "EOF"
+╔══════════════════════════════════════════════════════════════════════════╗
+║               PURPLE TEAM — SIMULATION CLEANUP                           ║
+╚══════════════════════════════════════════════════════════════════════════╝
+EOF
+    printf '%b\n' "$C_RESET"
+
+    if [ -d "$RANSOM_SIM_DIR" ]; then
+        rm -rf "$RANSOM_SIM_DIR"
+        printf '%b[✓]%b Removed simulation directory: %s\n' "$C_GREEN" "$C_RESET" "$RANSOM_SIM_DIR"
+    else
+        printf '%b[i]%b No simulation directory found at %s\n' "$C_BLUE" "$C_RESET" "$RANSOM_SIM_DIR"
+    fi
+
+    if [ -f "/tmp/RANSOMWARE_NOTE_PURPLETEAM.txt" ]; then
+        rm -f "/tmp/RANSOMWARE_NOTE_PURPLETEAM.txt"
+        printf '%b[✓]%b Removed legacy ransom note\n' "$C_GREEN" "$C_RESET"
+    fi
+
+    printf '\n%b[✓]%b Cleanup complete\n\n' "$C_GREEN" "$C_RESET"
+}
+
+# ============================================================================
+# PHASE 10: IMPACT SIMULATION (Ransomware TTPs)
+# Creates fake corporate files, encrypts them, drops ransom notes
+# Everything is reversible with --decrypt
 # ============================================================================
 
 phase_impact_simulation() {
-    begin_phase 10 "Impact Simulation ${C_YELLOW}(Reconnaissance Only)${C_RESET}" \
+    begin_phase 10 "Impact Simulation ${C_YELLOW}(Reversible Encryption)${C_RESET}" \
         "T1486, T1490, T1489, T1529, T1485" \
-        "Simulate ransomware recon: shadow copies, backups, critical services, recovery config"
+        "Simulate ransomware: create targets, encrypt with AES-256, drop ransom notes"
 
-    print_warning "SIMULATION ONLY — no encryption, deletion, or service disruption"
+    print_warning "CONTROLLED SIMULATION — all operations are in $RANSOM_SIM_DIR"
+    print_info "Decrypt with: $0 --decrypt"
+    print_info "Full cleanup: $0 --cleanup"
     printf '\n'
 
     # Shadow copies
@@ -1123,19 +1464,19 @@ phase_impact_simulation() {
         "T1489" \
         "Backup and business-critical services"
 
-    # Database services (high-value targets)
+    # Database services
     execute_ps \
         "Get-Service | Where-Object {\$_.Name -match 'MSSQL|MySQL|postgres|oracle|mongodb|redis|elasticsearch|MariaDB'} | Select-Object Name,DisplayName,Status,StartType | Format-Table -AutoSize" \
         "T1489" \
         "Database service enumeration"
 
-    # Ransomware target file count
+    # Real-world target enumeration on Windows filesystem
     ((TOTAL_ACTIONS++))
-    print_action "Counting potential encryption targets..."
+    print_action "Counting real encryption targets on Windows filesystem..."
 
     {
-        printf '    %s Ransomware Target Assessment\n' "$B_TL$B_H"
-        printf '    %s  NOTE: Enumeration only — NO encryption\n' "$B_V"
+        printf '    %s Ransomware Target Assessment (Windows FS)\n' "$B_TL$B_H"
+        printf '    %s  NOTE: Enumeration only — real files are NOT touched\n' "$B_V"
         printf '    %s\n' "$B_V"
     } >> "$LOG_FILE"
 
@@ -1155,74 +1496,69 @@ phase_impact_simulation() {
 
     {
         printf '    %s\n' "$B_V"
-        printf '    %s  Potential targets: %d files\n' "$B_V" "$target_count"
+        printf '    %s  Real targets found: %d files\n' "$B_V" "$target_count"
         printf '    %s\n' "$B_BL$B_H"
     } >> "$LOG_FILE"
 
     if [ $target_count -gt 0 ]; then
-        print_success "Identified $target_count potential encryption targets" "T1486"
-        print_finding "INFO" "$target_count files would be impacted in real ransomware scenario"
+        print_success "Identified $target_count real files (NOT encrypting these)" "T1486"
     else
-        print_info "No target files found"
-        ((FAILED_ACTIONS++))
+        print_info "No target files found on Windows filesystem"
     fi
 
-    # Ransom note indicator
-    print_action "Creating simulation ransom note indicator..."
+    # --- Ransomware Simulation: Build, Encrypt, Ransom Note ---
+    printf '\n'
+    printf '  %b── Ransomware Encryption Simulation ──%b\n\n' "$C_MAGENTA" "$C_RESET"
+
+    if [ -d "$RANSOM_SIM_DIR" ]; then
+        print_warning "Previous simulation exists — removing before fresh run"
+        rm -rf "$RANSOM_SIM_DIR"
+    fi
+    mkdir -p "$RANSOM_SIM_DIR"
+
+    build_corporate_directory_tree "$RANSOM_SIM_DIR"
+    encrypt_simulation_files "$RANSOM_SIM_DIR"
+    drop_ransom_notes "$RANSOM_SIM_DIR"
+
+    # Show the encrypted directory tree
     ((TOTAL_ACTIONS++))
+    print_action "Post-encryption directory state:"
+    local enc_tree
+    enc_tree=$(find "$RANSOM_SIM_DIR" -type f ! -name ".*" | sed "s|$RANSOM_SIM_DIR/||" | sort)
+    while IFS= read -r line; do
+        print_detail "$line"
+    done <<< "$enc_tree"
 
-    local ransom_note="/tmp/RANSOMWARE_NOTE_PURPLETEAM.txt"
-    cat > "$ransom_note" <<'RANSOMNOTE'
-╔══════════════════════════════════════════════════════════════╗
-║              PURPLE TEAM EXERCISE INDICATOR                  ║
-║               RANSOMWARE NOTE SIMULATION                     ║
-╚══════════════════════════════════════════════════════════════╝
+    {
+        printf '\n    %s Post-Encryption Directory Listing\n' "$B_TL$B_H"
+        printf '%s\n' "$enc_tree" | sed "s/^/    $B_V  /"
+        printf '    %s\n' "$B_BL$B_H"
+    } >> "$LOG_FILE"
+    print_success "Encryption simulation complete" "T1486"
 
-  THIS IS A SIMULATED RANSOM NOTE FOR PURPLE TEAM TRAINING.
-  NO FILES HAVE BEEN ENCRYPTED. NO DATA WAS HARMED.
-
-  In a real attack, this note would contain:
-    - Ransom amount and cryptocurrency wallet
-    - Deadline and escalation threats
-    - Data leak threats (double extortion)
-    - "Support" contact channels
-
-  Blue Team Detection Opportunities:
-    - File creation in unusual locations
-    - Suspicious naming pattern (RANSOMWARE_NOTE_*)
-    - WSL process spawning PowerShell
-    - Rapid file enumeration across directories
-    - Shadow copy / backup service queries
-    - Service stop attempts
-
-  MITRE ATT&CK: T1486 (Data Encrypted for Impact)
-RANSOMNOTE
-
-    if [ -f "$ransom_note" ]; then
-        print_success "Ransom note indicator created: $ransom_note" "T1486"
-    else
-        print_error "Failed to create ransom note indicator" "T1486"
-    fi
-
-    # Event log clearing capability check (not actually clearing)
+    # Event log clearing capability check
     execute_ps \
         "Get-WinEvent -ListLog Security,System,Application -ErrorAction SilentlyContinue | Select-Object LogName,RecordCount,MaximumSizeInBytes | Format-Table" \
         "T1070.001" \
         "Event log sizes (clearing impact assessment)"
 
-    # System recovery configuration
+    # Boot / recovery config
     execute_ps \
         "bcdedit /enum 2>\$null | Select-Object -First 20; Get-ItemProperty 'HKLM:\SYSTEM\CurrentControlSet\Control\SafeBoot' -ErrorAction SilentlyContinue | Format-List" \
         "T1490" \
         "Boot configuration and recovery options"
 
-    # Mapped drives (ransomware lateral spread)
+    # Mapped drives
     execute_ps \
         "Get-PSDrive -PSProvider FileSystem | Where-Object {\$_.Root -match '\\\\\\\\' } | Select-Object Name,Root,Used,Free | Format-Table" \
         "T1486" \
         "Network drives (lateral encryption targets)"
 
-    print_warning "Impact simulation complete — no files were harmed, no services disrupted"
+    printf '\n'
+    print_warning "Impact simulation complete"
+    print_info "Files encrypted in: $RANSOM_SIM_DIR"
+    print_info "Decrypt:  $0 --decrypt"
+    print_info "Cleanup:  $0 --cleanup"
 
     end_phase
 }
@@ -1235,7 +1571,7 @@ show_help() {
     printf '%b' "$C_CYAN"
     cat << "EOF"
 ╔══════════════════════════════════════════════════════════════════════════╗
-║                     PURPLE TEAM AGENT v4.0                               ║
+║                     PURPLE TEAM AGENT v4.1                               ║
 ║          Advanced Adversary Simulation — Financial / Gov Sector          ║
 ╚══════════════════════════════════════════════════════════════════════════╝
 EOF
@@ -1251,6 +1587,8 @@ EOF
     printf '    %b-l, --list%b              List available phases\n' "$C_GREEN" "$C_RESET"
     printf '    %b-q, --quiet%b             Minimal terminal output\n' "$C_GREEN" "$C_RESET"
     printf '    %b-v, --verbose%b           Verbose / debug output\n' "$C_GREEN" "$C_RESET"
+    printf '    %b--decrypt%b               Decrypt files from Phase 10 simulation\n' "$C_YELLOW" "$C_RESET"
+    printf '    %b--cleanup%b               Remove all simulation artifacts\n' "$C_YELLOW" "$C_RESET"
     printf '\n'
     printf '%b%s%b\n' "$C_WHITE" "PHASES:" "$C_RESET"
     printf '    %bPhase  1%b — System & Environment Profiling     (T1082, T1497, T1614)\n' "$C_CYAN" "$C_RESET"
@@ -1262,12 +1600,15 @@ EOF
     printf '    %bPhase  7%b — Network & Lateral Movement Recon   (T1049, T1018, T1482)\n' "$C_CYAN" "$C_RESET"
     printf '    %bPhase  8%b — Collection & Staging               (T1119, T1074, T1114)\n' "$C_CYAN" "$C_RESET"
     printf '    %bPhase  9%b — Persistence Mechanism Recon        (T1547, T1053, T1546)\n' "$C_CYAN" "$C_RESET"
-    printf '    %bPhase 10%b — Impact Simulation (No Harm)        (T1486, T1490, T1489)\n' "$C_MAGENTA" "$C_RESET"
+    printf '    %bPhase 10%b — Ransomware Simulation (Reversible) (T1486, T1490, T1489)\n' "$C_MAGENTA" "$C_RESET"
     printf '\n'
     printf '%b%s%b\n' "$C_WHITE" "EXAMPLES:" "$C_RESET"
     printf '    %s --all                 # Run all phases\n' "$0"
     printf '    %s --phase 1             # System profiling only\n' "$0"
     printf '    %s --phase 5,6,7         # Credentials, defenses, network\n' "$0"
+    printf '    %s --phase 10            # Ransomware simulation only\n' "$0"
+    printf '    %s --decrypt             # Reverse Phase 10 encryption\n' "$0"
+    printf '    %s --cleanup             # Remove all simulation data\n' "$0"
     printf '    %s --list                # Show phase details\n' "$0"
     printf '\n'
     printf '%b%s%b\n' "$C_WHITE" "OUTPUT:" "$C_RESET"
@@ -1298,7 +1639,7 @@ EOF
         "7|Network & Lateral Movement Recon|T1049, T1018, T1135, T1482, T1016|Connections, shares, routing, domain trusts, RDP history|~30s"
         "8|Collection & Staging|T1119, T1074.001, T1114.001, T1005|Stage documents, email archives, clipboard, recent files|~25s"
         "9|Persistence Mechanism Recon|T1547, T1053, T1543, T1546, T1574|Run keys, tasks, services, WMI, COM hijack, DLL search order|~25s"
-        "10|Impact Simulation (No Harm)|T1486, T1490, T1489, T1529|Shadow copies, backups, DB services, target enumeration|~30s"
+        "10|Ransomware Simulation (Reversible)|T1486, T1490, T1489, T1529|Create/encrypt fake corporate files, drop ransom notes, --decrypt to reverse|~35s"
     )
 
     for entry in "${phases[@]}"; do
@@ -1467,6 +1808,14 @@ main() {
                 ;;
             -l|--list)
                 list_phases
+                exit 0
+                ;;
+            --decrypt)
+                decrypt_ransomware_simulation
+                exit 0
+                ;;
+            --cleanup)
+                cleanup_ransomware_simulation
                 exit 0
                 ;;
             -a|--all)
