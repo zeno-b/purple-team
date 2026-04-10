@@ -14,7 +14,7 @@ set -o pipefail
 # CONFIGURATION
 # ============================================================================
 
-readonly SCRIPT_VERSION="4.1"
+readonly SCRIPT_VERSION="4.2"
 readonly WINDOWS_SYSTEM="/mnt/c"
 readonly TIMEOUT_SECONDS=30
 
@@ -114,13 +114,18 @@ JSONEOF
 
 # ============================================================================
 # TERMINAL OUTPUT FUNCTIONS
+# Every line shows wall-clock time + elapsed seconds for easy correlation
 # ============================================================================
+
+_ts() { date '+%H:%M:%S'; }
+_elapsed() { printf '+%ds' "$(( $(date +%s) - START_TIME ))"; }
+_log_ts() { date '+%Y-%m-%d %H:%M:%S'; }
 
 print_success() {
     local message="$1"
     local technique="${2:-}"
-    printf '%b[✓]%b %b%s%b\n' "$C_GREEN" "$C_RESET" "$C_WHITE" "$message" "$C_RESET"
-    log_text 4 "[SUCCESS] $message"
+    printf '%b%s %s %b[✓]%b %b%s%b\n' "$C_DIM" "$(_ts)" "$(_elapsed)" "$C_GREEN" "$C_RESET" "$C_WHITE" "$message" "$C_RESET"
+    log_text 4 "$(_log_ts) [SUCCESS] $message"
     log_json_event "SUCCESS" "$technique" "$CURRENT_PHASE" "$message"
     ((SUCCESSFUL_ACTIONS++))
 }
@@ -128,8 +133,8 @@ print_success() {
 print_error() {
     local message="$1"
     local technique="${2:-}"
-    printf '%b[✗]%b %b%s%b\n' "$C_RED" "$C_RESET" "$C_RED" "$message" "$C_RESET"
-    log_text 4 "[FAILED]  $message"
+    printf '%b%s %s %b[✗]%b %b%s%b\n' "$C_DIM" "$(_ts)" "$(_elapsed)" "$C_RED" "$C_RESET" "$C_RED" "$message" "$C_RESET"
+    log_text 4 "$(_log_ts) [FAILED]  $message"
     log_json_event "FAILED" "$technique" "$CURRENT_PHASE" "$message"
     ((FAILED_ACTIONS++))
 }
@@ -137,25 +142,25 @@ print_error() {
 print_warning() {
     local message="$1"
     local technique="${2:-}"
-    printf '%b[!]%b %b%s%b\n' "$C_YELLOW" "$C_RESET" "$C_YELLOW" "$message" "$C_RESET"
-    log_text 4 "[WARNING] $message"
+    printf '%b%s %s %b[!]%b %b%s%b\n' "$C_DIM" "$(_ts)" "$(_elapsed)" "$C_YELLOW" "$C_RESET" "$C_YELLOW" "$message" "$C_RESET"
+    log_text 4 "$(_log_ts) [WARNING] $message"
 }
 
 print_info() {
     local message="$1"
-    printf '%b[i]%b %b%s%b\n' "$C_BLUE" "$C_RESET" "$C_GRAY" "$message" "$C_RESET"
-    log_text 4 "[INFO]    $message"
+    printf '%b%s %s %b[i]%b %b%s%b\n' "$C_DIM" "$(_ts)" "$(_elapsed)" "$C_BLUE" "$C_RESET" "$C_GRAY" "$message" "$C_RESET"
+    log_text 4 "$(_log_ts) [INFO]    $message"
 }
 
 print_action() {
     local message="$1"
-    printf '%b[>]%b %b%s%b\n' "$C_MAGENTA" "$C_RESET" "$C_MAGENTA" "$message" "$C_RESET"
-    log_text 4 "[ACTION]  $message"
+    printf '%b%s %s %b[>]%b %b%s%b\n' "$C_DIM" "$(_ts)" "$(_elapsed)" "$C_MAGENTA" "$C_RESET" "$C_MAGENTA" "$message" "$C_RESET"
+    log_text 4 "$(_log_ts) [ACTION]  $message"
 }
 
 print_detail() {
     local message="$1"
-    printf '    %b%s%b\n' "$C_DIM" "$message" "$C_RESET"
+    printf '              %b%s%b\n' "$C_DIM" "$message" "$C_RESET"
     log_text 8 "$message"
 }
 
@@ -168,23 +173,27 @@ print_finding() {
         LOW)      color="$C_CYAN" ;;
         INFO)     color="$C_GRAY" ;;
     esac
-    printf '    %b[%s]%b %s\n' "$color" "$severity" "$C_RESET" "$message"
-    log_text 8 "[FINDING:$severity] $message"
+    printf '              %b[%s]%b %s\n' "$color" "$severity" "$C_RESET" "$message"
+    log_text 8 "$(_log_ts) [FINDING:$severity] $message"
     PHASE_FINDINGS+=("[$severity] $message")
 }
 
-# Phase section header with timing and technique mapping
+# Phase section header with wall-clock start time and technique mapping
 begin_phase() {
     local number="$1" title="$2" techniques="$3" description="$4"
     CURRENT_PHASE="Phase $number"
     CURRENT_PHASE_START=$(date +%s)
     PHASE_FINDINGS=()
 
+    local now
+    now=$(date '+%Y-%m-%d %H:%M:%S')
+
     printf '\n'
     printf '%b╔══════════════════════════════════════════════════════════════════════╗%b\n' "$C_CYAN" "$C_RESET"
     printf '%b║%b  %bPHASE %s: %s%b\n' "$C_CYAN" "$C_RESET" "$C_BOLD" "$number" "$title" "$C_RESET"
     printf '%b║%b  %bMITRE ATT&CK: %s%b\n' "$C_CYAN" "$C_RESET" "$C_GRAY" "$techniques" "$C_RESET"
     printf '%b║%b  %b%s%b\n' "$C_CYAN" "$C_RESET" "$C_DIM" "$description" "$C_RESET"
+    printf '%b║%b  %bStarted: %s   (elapsed: %s)%b\n' "$C_CYAN" "$C_RESET" "$C_DIM" "$now" "$(_elapsed)" "$C_RESET"
     printf '%b╚══════════════════════════════════════════════════════════════════════╝%b\n' "$C_CYAN" "$C_RESET"
     printf '\n'
 
@@ -193,14 +202,18 @@ begin_phase() {
         printf '  ══════════════════════════════════════════════════════════════════\n'
         printf '  PHASE %s: %s\n' "$number" "$title"
         printf '  Techniques: %s\n' "$techniques"
-        printf '  Started: %s\n' "$(date '+%Y-%m-%d %H:%M:%S')"
+        printf '  Started:    %s  (total elapsed: %s)\n' "$now" "$(_elapsed)"
         printf '  ──────────────────────────────────────────────────────────────────\n'
         printf '\n'
     } >> "$LOG_FILE"
 }
 
 end_phase() {
-    local phase_duration=$(( $(date +%s) - CURRENT_PHASE_START ))
+    local phase_end phase_duration
+    phase_end=$(date +%s)
+    phase_duration=$(( phase_end - CURRENT_PHASE_START ))
+    local end_wall
+    end_wall=$(date '+%Y-%m-%d %H:%M:%S')
 
     if [ ${#PHASE_FINDINGS[@]} -gt 0 ]; then
         printf '\n'
@@ -210,7 +223,8 @@ end_phase() {
         done
     fi
 
-    printf '\n  %b%s completed in %ds%b\n' "$C_DIM" "$CURRENT_PHASE" "$phase_duration" "$C_RESET"
+    printf '\n  %b%s completed at %s  (%ds elapsed, total %s)%b\n' \
+        "$C_DIM" "$CURRENT_PHASE" "$end_wall" "$phase_duration" "$(_elapsed)" "$C_RESET"
 
     {
         printf '\n'
@@ -218,7 +232,8 @@ end_phase() {
         for f in "${PHASE_FINDINGS[@]}"; do
             printf '    %s\n' "$f"
         done
-        printf '  Duration: %ds\n' "$phase_duration"
+        printf '  Finished:  %s\n' "$end_wall"
+        printf '  Duration:  %ds  (total elapsed: %s)\n' "$phase_duration" "$(_elapsed)"
         printf '  ──────────────────────────────────────────────────────────────────\n'
     } >> "$LOG_FILE"
 }
@@ -267,7 +282,7 @@ execute_ps() {
 
         {
             printf '    %s %s\n' "$B_TL$B_H" "$description"
-            printf '    %s  Technique: %s | Status: SUCCESS\n' "$B_V" "$technique"
+            printf '    %s  Technique: %s | Status: SUCCESS | Time: %s\n' "$B_V" "$technique" "$(_log_ts)"
             printf '    %s\n' "$B_V"
             sed 's/^/    │  /' "$temp_out"
             printf '    %s\n' "$B_BL$B_H"
@@ -298,7 +313,7 @@ execute_ps() {
 
         {
             printf '    %s %s\n' "$B_TL$B_H" "$description"
-            printf '    %s  Technique: %s | Status: FAILED\n' "$B_V" "$technique"
+            printf '    %s  Technique: %s | Status: FAILED | Time: %s\n' "$B_V" "$technique" "$(_log_ts)"
             printf '    %s  Error: %s\n' "$B_V" "$error_msg"
             printf '    %s\n' "$B_BL$B_H"
             printf '\n'
@@ -424,6 +439,24 @@ phase_system_discovery() {
         "T1082" \
         "UAC configuration"
 
+    # Installed .NET / PowerShell versions (execution framework)
+    execute_ps \
+        "Get-ChildItem 'HKLM:\SOFTWARE\Microsoft\NET Framework Setup\NDP\v4\Full' -ErrorAction SilentlyContinue | Get-ItemProperty | Select-Object Version,Release | Format-List; \$PSVersionTable | Format-List" \
+        "T1082" \
+        ".NET and PowerShell version details"
+
+    # BitLocker status
+    execute_ps \
+        "Get-BitLockerVolume -ErrorAction SilentlyContinue | Select-Object MountPoint,VolumeStatus,ProtectionStatus,EncryptionMethod | Format-Table" \
+        "T1082" \
+        "BitLocker encryption status"
+
+    # Antivirus product enumeration via WMI
+    execute_ps \
+        "Get-CimInstance -Namespace root/SecurityCenter2 -ClassName AntiVirusProduct -ErrorAction SilentlyContinue | Select-Object displayName,productState,pathToSignedProductExe | Format-Table -AutoSize" \
+        "T1518.001" \
+        "Registered antivirus products (SecurityCenter2)"
+
     end_phase
 }
 
@@ -539,6 +572,18 @@ phase_process_discovery() {
         "Get-Service | Where-Object {\$_.DisplayName -match 'Defender|Firewall|Update|Sense|SmartScreen|DLP|Endpoint|Audit|Sysmon'} | Select-Object Name,DisplayName,Status,StartType | Format-Table -AutoSize" \
         "T1007" \
         "Security-relevant services status"
+
+    # Loaded DLLs in key processes (injection indicators)
+    execute_ps \
+        "Get-Process explorer -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Modules -ErrorAction SilentlyContinue | Where-Object {\$_.FileName -notmatch 'Windows|System32|SysWOW64'} | Select-Object -First 10 FileName | Format-Table" \
+        "T1055" \
+        "Non-system DLLs in explorer.exe (injection check)"
+
+    # Parent-child process tree
+    execute_ps \
+        "Get-CimInstance Win32_Process | Select-Object -First 30 ProcessId,ParentProcessId,Name,CommandLine | Format-Table -AutoSize -Wrap" \
+        "T1057" \
+        "Process tree with command lines (anomaly detection)"
 
     end_phase
 }
@@ -863,6 +908,24 @@ phase_defense_evasion_recon() {
         "T1003" \
         "LSA protection and credential hardening"
 
+    # Credential Guard
+    execute_ps \
+        "Get-CimInstance -ClassName Win32_DeviceGuard -Namespace 'root\Microsoft\Windows\DeviceGuard' -ErrorAction SilentlyContinue | Select-Object SecurityServicesRunning,VirtualizationBasedSecurityStatus | Format-List" \
+        "T1003" \
+        "Credential Guard / VBS status"
+
+    # Windows Event Forwarding
+    execute_ps \
+        "Get-ItemProperty 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\EventLog\EventForwarding\SubscriptionManager' -ErrorAction SilentlyContinue | Format-List" \
+        "T1562.002" \
+        "Windows Event Forwarding configuration"
+
+    # ETW providers (advanced telemetry)
+    execute_ps \
+        "logman query providers 2>\$null | Select-String -Pattern 'Microsoft-Windows-Security|Microsoft-Windows-Sysmon|Microsoft-Windows-PowerShell' | Select-Object -First 10" \
+        "T1562.006" \
+        "ETW providers (telemetry sources)"
+
     end_phase
 }
 
@@ -935,6 +998,24 @@ phase_network_discovery() {
         "netsh interface portproxy show all 2>\$null" \
         "T1090" \
         "Port proxy / forwarding rules"
+
+    # VPN connections
+    execute_ps \
+        "Get-VpnConnection -ErrorAction SilentlyContinue | Select-Object Name,ServerAddress,ConnectionStatus,TunnelType | Format-Table" \
+        "T1133" \
+        "VPN connections (external access paths)"
+
+    # WiFi interfaces and profiles
+    execute_ps \
+        "netsh wlan show interfaces 2>\$null | Select-String 'Name|State|SSID|BSSID|Signal'" \
+        "T1016" \
+        "WiFi interface status and connected network"
+
+    # Hosts file tampering check
+    execute_ps \
+        "Get-Content 'C:\Windows\System32\drivers\etc\hosts' -ErrorAction SilentlyContinue | Where-Object {\$_ -notmatch '^#' -and \$_.Trim() -ne ''}" \
+        "T1565.001" \
+        "Hosts file entries (DNS override / tampering)"
 
     end_phase
 }
@@ -1564,6 +1645,133 @@ phase_impact_simulation() {
 }
 
 # ============================================================================
+# PHASE 11: EICAR AV DETECTION TEST
+# Test antivirus detection using the safe EICAR test file
+# ============================================================================
+
+phase_eicar_test() {
+    begin_phase 11 "EICAR AV Detection Test" "AV-TEST" \
+        "Test antivirus detection with the safe, industry-standard EICAR test string"
+
+    print_warning "EICAR is a SAFE, industry-standard test file — NOT malware"
+    printf '\n'
+
+    local eicar='X5O!P%@AP[4\PZX54(P^)7CC)7}$EICAR-STANDARD-ANTIVIRUS-TEST-FILE!$H+H*'
+
+    {
+        printf '    %s EICAR AV Detection Test\n' "$B_TL$B_H"
+        printf '    %s  NOTE: EICAR is a SAFE, industry-standard test file\n' "$B_V"
+        printf '    %s  Time: %s\n' "$B_V" "$(_log_ts)"
+        printf '    %s\n' "$B_V"
+    } >> "$LOG_FILE"
+
+    # Test 1: EICAR in WSL filesystem
+    ((TOTAL_ACTIONS++))
+    print_action "Creating EICAR test file in WSL filesystem..."
+    local eicar_tmp
+    eicar_tmp="/tmp/eicar_test_$(date +%Y%m%d_%H%M%S).com"
+
+    if echo "$eicar" > "$eicar_tmp" 2>/dev/null; then
+        if [ -f "$eicar_tmp" ]; then
+            print_success "EICAR created in WSL: $eicar_tmp" "AV-TEST"
+            printf '    %s  [WSL] Created: %s at %s\n' "$B_V" "$eicar_tmp" "$(_log_ts)" >> "$LOG_FILE"
+            sleep 2
+            if [ -f "$eicar_tmp" ]; then
+                print_warning "EICAR still exists — AV may not be monitoring WSL filesystem"
+                printf '    %s  [WSL] File persists at %s — possible AV gap\n' "$B_V" "$(_log_ts)" >> "$LOG_FILE"
+                print_finding "MEDIUM" "AV not monitoring WSL filesystem"
+            else
+                print_success "EICAR deleted by AV — WSL filesystem is monitored" "AV-TEST"
+                printf '    %s  [WSL] File deleted by AV at %s\n' "$B_V" "$(_log_ts)" >> "$LOG_FILE"
+                print_finding "INFO" "AV actively monitoring WSL filesystem"
+            fi
+        fi
+    else
+        print_success "EICAR blocked immediately in WSL — AV is active" "AV-TEST"
+        printf '    %s  [WSL] Blocked immediately at %s\n' "$B_V" "$(_log_ts)" >> "$LOG_FILE"
+    fi
+
+    # Test 2: EICAR on Windows filesystem
+    ((TOTAL_ACTIONS++))
+    print_action "Creating EICAR test file on Windows filesystem..."
+    local eicar_win="$WINDOWS_SYSTEM/Users/Public/Documents/eicar_test.com"
+
+    if echo "$eicar" > "$eicar_win" 2>/dev/null; then
+        sleep 1
+        if [ -f "$eicar_win" ]; then
+            print_warning "EICAR persists on Windows — AV may be inactive" "AV-TEST"
+            printf '    %s  [WINDOWS] File persists at %s — AV may be disabled\n' "$B_V" "$(_log_ts)" >> "$LOG_FILE"
+            print_finding "HIGH" "AV not blocking EICAR on Windows filesystem"
+            rm -f "$eicar_win" 2>/dev/null
+        else
+            print_success "EICAR deleted from Windows — AV is active" "AV-TEST"
+            printf '    %s  [WINDOWS] File deleted by AV at %s\n' "$B_V" "$(_log_ts)" >> "$LOG_FILE"
+        fi
+    else
+        print_success "EICAR blocked on Windows filesystem — AV is active" "AV-TEST"
+        printf '    %s  [WINDOWS] Blocked immediately at %s\n' "$B_V" "$(_log_ts)" >> "$LOG_FILE"
+    fi
+
+    # Test 3: Multiple file extensions
+    print_action "Testing EICAR with various file extensions..."
+    ((TOTAL_ACTIONS++))
+
+    local extensions=("txt" "exe" "com" "bat" "ps1" "js" "vbs" "hta")
+    local detected=0 missed=0
+
+    for ext in "${extensions[@]}"; do
+        local test_file="/tmp/eicar_test.$ext"
+        echo "$eicar" > "$test_file" 2>/dev/null
+        sleep 1
+        if [ -f "$test_file" ]; then
+            printf '    %s  [.%s] NOT detected at %s\n' "$B_V" "$ext" "$(_log_ts)" >> "$LOG_FILE"
+            ((missed++))
+            rm -f "$test_file" 2>/dev/null
+        else
+            printf '    %s  [.%s] Detected and removed at %s\n' "$B_V" "$ext" "$(_log_ts)" >> "$LOG_FILE"
+            ((detected++))
+        fi
+    done
+
+    {
+        printf '    %s\n' "$B_V"
+        printf '    %s  Detection Summary at %s:\n' "$B_V" "$(_log_ts)"
+        printf '    %s    Detected: %d/%d\n' "$B_V" "$detected" "${#extensions[@]}"
+        printf '    %s    Missed:   %d/%d\n' "$B_V" "$missed" "${#extensions[@]}"
+        printf '    %s\n' "$B_BL$B_H"
+    } >> "$LOG_FILE"
+
+    if [ $detected -eq ${#extensions[@]} ]; then
+        print_success "AV detected all $detected EICAR file variations" "AV-TEST"
+    elif [ $detected -gt 0 ]; then
+        print_warning "AV detected $detected/${#extensions[@]} EICAR variations — gaps exist"
+        print_finding "MEDIUM" "AV missed ${missed} out of ${#extensions[@]} file extension tests"
+    else
+        print_error "AV did not detect any EICAR files — AV may not be active" "AV-TEST"
+        print_finding "HIGH" "No AV detection of any EICAR test file"
+    fi
+
+    # Defender configuration
+    execute_ps \
+        "Get-MpComputerStatus -ErrorAction SilentlyContinue | Select-Object AntivirusEnabled,AMServiceEnabled,RealTimeProtectionEnabled,IoavProtectionEnabled,OnAccessProtectionEnabled | Format-List" \
+        "AV-TEST" \
+        "Windows Defender status"
+
+    execute_ps \
+        "Get-MpPreference -ErrorAction SilentlyContinue | Select-Object DisableRealtimeMonitoring,DisableBehaviorMonitoring,DisableBlockAtFirstSeen,DisableIOAVProtection | Format-List" \
+        "AV-TEST" \
+        "Windows Defender preferences (disabled features)"
+
+    # Exclusion paths (attackers add exclusions to evade)
+    execute_ps \
+        "Get-MpPreference -ErrorAction SilentlyContinue | Select-Object -ExpandProperty ExclusionPath -ErrorAction SilentlyContinue" \
+        "T1562.001" \
+        "Defender exclusion paths (evasion surface)"
+
+    end_phase
+}
+
+# ============================================================================
 # HELP AND USAGE
 # ============================================================================
 
@@ -1571,7 +1779,7 @@ show_help() {
     printf '%b' "$C_CYAN"
     cat << "EOF"
 ╔══════════════════════════════════════════════════════════════════════════╗
-║                     PURPLE TEAM AGENT v4.1                               ║
+║                     PURPLE TEAM AGENT v4.2                               ║
 ║          Advanced Adversary Simulation — Financial / Gov Sector          ║
 ╚══════════════════════════════════════════════════════════════════════════╝
 EOF
@@ -1583,7 +1791,7 @@ EOF
     printf '%b%s%b\n' "$C_WHITE" "OPTIONS:" "$C_RESET"
     printf '    %b-h, --help%b              Show this help message\n' "$C_GREEN" "$C_RESET"
     printf '    %b-a, --all%b               Run all phases (default)\n' "$C_GREEN" "$C_RESET"
-    printf '    %b-p, --phase <N[,N]>%b     Run specific phase(s) (1-10)\n' "$C_GREEN" "$C_RESET"
+    printf '    %b-p, --phase <N[,N]>%b     Run specific phase(s) (1-11)\n' "$C_GREEN" "$C_RESET"
     printf '    %b-l, --list%b              List available phases\n' "$C_GREEN" "$C_RESET"
     printf '    %b-q, --quiet%b             Minimal terminal output\n' "$C_GREEN" "$C_RESET"
     printf '    %b-v, --verbose%b           Verbose / debug output\n' "$C_GREEN" "$C_RESET"
@@ -1601,6 +1809,7 @@ EOF
     printf '    %bPhase  8%b — Collection & Staging               (T1119, T1074, T1114)\n' "$C_CYAN" "$C_RESET"
     printf '    %bPhase  9%b — Persistence Mechanism Recon        (T1547, T1053, T1546)\n' "$C_CYAN" "$C_RESET"
     printf '    %bPhase 10%b — Ransomware Simulation (Reversible) (T1486, T1490, T1489)\n' "$C_MAGENTA" "$C_RESET"
+    printf '    %bPhase 11%b — EICAR AV Detection Test            (AV-TEST, T1562)\n' "$C_CYAN" "$C_RESET"
     printf '\n'
     printf '%b%s%b\n' "$C_WHITE" "EXAMPLES:" "$C_RESET"
     printf '    %s --all                 # Run all phases\n' "$0"
@@ -1640,19 +1849,21 @@ EOF
         "8|Collection & Staging|T1119, T1074.001, T1114.001, T1005|Stage documents, email archives, clipboard, recent files|~25s"
         "9|Persistence Mechanism Recon|T1547, T1053, T1543, T1546, T1574|Run keys, tasks, services, WMI, COM hijack, DLL search order|~25s"
         "10|Ransomware Simulation (Reversible)|T1486, T1490, T1489, T1529|Create/encrypt fake corporate files, drop ransom notes, --decrypt to reverse|~35s"
+        "11|EICAR AV Detection Test|AV-TEST, T1562.001|Test AV with safe EICAR string across WSL/Windows and multiple extensions|~25s"
     )
 
     for entry in "${phases[@]}"; do
         IFS='|' read -r num title techniques desc duration <<< "$entry"
         local color="$C_GREEN"
         [ "$num" = "10" ] && color="$C_MAGENTA"
+        [ "$num" = "11" ] && color="$C_CYAN"
         printf '  %b[%2s]%b  %b%s%b\n' "$C_WHITE" "$num" "$C_RESET" "$color" "$title" "$C_RESET"
         printf '       MITRE ATT&CK: %s\n' "$techniques"
         printf '       %s\n' "$desc"
         printf '       Duration: %s\n\n' "$duration"
     done
 
-    printf '  %bTotal estimated time for all phases: ~5-6 minutes%b\n\n' "$C_GRAY" "$C_RESET"
+    printf '  %bTotal estimated time for all phases: ~6-7 minutes%b\n\n' "$C_GRAY" "$C_RESET"
 }
 
 # ============================================================================
@@ -1864,6 +2075,7 @@ main() {
         phase_automated_collection;   sleep 1
         phase_persistence_recon;      sleep 1
         phase_impact_simulation;      sleep 1
+        phase_eicar_test;             sleep 1
     else
         for phase in "${phases_to_run[@]}"; do
             case $phase in
@@ -1877,8 +2089,9 @@ main() {
                 8)  phase_automated_collection ;;
                 9)  phase_persistence_recon ;;
                 10) phase_impact_simulation ;;
+                11) phase_eicar_test ;;
                 *)
-                    print_error "Invalid phase number: $phase (valid range: 1-10)"
+                    print_error "Invalid phase number: $phase (valid range: 1-11)"
                     ;;
             esac
             sleep 1
