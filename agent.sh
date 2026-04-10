@@ -2,9 +2,10 @@
 
 ################################################################################
 # Purple Team Agent - WSL to Windows Host
-# Version: 3.0
-# Description: Red team simulation for purple team security exercises
-# Usage: ./purple_agent.sh [options]
+# Version: 4.0
+# Description: Advanced adversary simulation for purple team exercises
+#              targeting financial and government sector TTPs
+# Usage: ./agent.sh [options]
 ################################################################################
 
 set -o pipefail
@@ -13,13 +14,15 @@ set -o pipefail
 # CONFIGURATION
 # ============================================================================
 
-readonly SCRIPT_VERSION="3.0"
-readonly LOG_FILE="/tmp/redteam_agent_$(date +%Y%m%d_%H%M%S).log"
-readonly JSON_LOG="/tmp/redteam_agent_$(date +%Y%m%d_%H%M%S).json"
+readonly SCRIPT_VERSION="4.0"
 readonly WINDOWS_SYSTEM="/mnt/c"
 readonly TIMEOUT_SECONDS=30
 
-# Terminal color codes for readable output
+# Log paths are set once at startup; declare here, assign in init_logs
+LOG_FILE=""
+JSON_LOG=""
+
+# Terminal color codes
 readonly C_RED='\033[0;31m'
 readonly C_GREEN='\033[0;32m'
 readonly C_YELLOW='\033[1;33m'
@@ -28,371 +31,288 @@ readonly C_MAGENTA='\033[0;35m'
 readonly C_CYAN='\033[0;36m'
 readonly C_WHITE='\033[1;37m'
 readonly C_GRAY='\033[0;90m'
+readonly C_BOLD='\033[1m'
+readonly C_DIM='\033[2m'
 readonly C_RESET='\033[0m'
 
-# Status symbols for output clarity
-readonly SYM_SUCCESS="✓"
-readonly SYM_FAIL="✗"
-readonly SYM_WARN="⚠"
-readonly SYM_INFO="ℹ"
-readonly SYM_ACTION="⚡"
+# Box-drawing characters for structured output
+readonly B_TL="┌" B_TR="┐" B_BL="└" B_BR="┘"
+readonly B_H="─" B_V="│" B_VR="├" B_VL="┤"
 
 # Track execution statistics
 TOTAL_ACTIONS=0
 SUCCESSFUL_ACTIONS=0
 FAILED_ACTIONS=0
+SKIPPED_ACTIONS=0
 START_TIME=$(date +%s)
+CURRENT_PHASE=""
+CURRENT_PHASE_START=0
+PHASE_FINDINGS=()
 
 # Environment detection results
 WSL_VERSION=""
 POWERSHELL_CMD=""
+HOSTNAME_DETECTED=""
+USERNAME_DETECTED=""
 
 # ============================================================================
-# HELP AND USAGE
+# LOGGING SYSTEM
 # ============================================================================
 
-show_help() {
-    echo -e "${C_CYAN}"
-    cat << "EOF"
-╔══════════════════════════════════════════════════════════════════════════╗
-║                     PURPLE TEAM AGENT v3.0                               ║
-║              WSL to Windows Host Red Team Simulation                     ║
-╚══════════════════════════════════════════════════════════════════════════╝
-EOF
-    echo -e "${C_RESET}"
-    echo ""
-    echo -e "${C_WHITE}USAGE:${C_RESET}"
-    echo "    $0 [OPTIONS]"
-    echo ""
-    echo -e "${C_WHITE}OPTIONS:${C_RESET}"
-    echo -e "    ${C_GREEN}-h, --help${C_RESET}              Show this help message"
-    echo -e "    ${C_GREEN}-a, --all${C_RESET}               Run all phases (default)"
-    echo -e "    ${C_GREEN}-p, --phase <number>${C_RESET}    Run a specific phase (1-11)"
-    echo -e "    ${C_GREEN}-l, --list${C_RESET}              List all available phases"
-    echo -e "    ${C_GREEN}-q, --quiet${C_RESET}             Minimal output (logs only)"
-    echo -e "    ${C_GREEN}-v, --verbose${C_RESET}           Verbose output with details"
-    echo ""
-    echo -e "${C_WHITE}PHASES:${C_RESET}"
-    echo -e "    ${C_CYAN}Phase 1${C_RESET}  - System Information Discovery (T1082)"
-    echo -e "    ${C_CYAN}Phase 2${C_RESET}  - Account Discovery (T1087)"
-    echo -e "    ${C_CYAN}Phase 3${C_RESET}  - Process Discovery (T1057)"
-    echo -e "    ${C_CYAN}Phase 4${C_RESET}  - File and Directory Discovery (T1083)"
-    echo -e "    ${C_CYAN}Phase 5${C_RESET}  - Credential Search (T1552.001)"
-    echo -e "    ${C_CYAN}Phase 6${C_RESET}  - Registry Enumeration (T1012, T1518)"
-    echo -e "    ${C_CYAN}Phase 7${C_RESET}  - Network Discovery (T1049, T1018, T1135)"
-    echo -e "    ${C_CYAN}Phase 8${C_RESET}  - Automated Collection (T1119)"
-    echo -e "    ${C_CYAN}Phase 9${C_RESET}  - Persistence Reconnaissance (T1547, T1053)"
-    echo -e "    ${C_CYAN}Phase 10${C_RESET} - Ransomware-like Behavior (T1486, T1490, T1489)"
-    echo -e "    ${C_CYAN}Phase 11${C_RESET} - EICAR AV Detection Test"
-    echo ""
-    echo -e "${C_WHITE}EXAMPLES:${C_RESET}"
-    echo "    # Run all phases"
-    echo "    $0 --all"
-    echo ""
-    echo "    # Run only phase 1"
-    echo "    $0 --phase 1"
-    echo ""
-    echo "    # Run phases 1, 5, and 11"
-    echo "    $0 --phase 1,5,11"
-    echo ""
-    echo "    # List all phases"
-    echo "    $0 --list"
-    echo ""
-    echo -e "${C_WHITE}OUTPUT:${C_RESET}"
-    echo -e "    ${C_YELLOW}Screen:${C_RESET}      Color-coded real-time output"
-    echo -e "    ${C_YELLOW}Text Log:${C_RESET}    Professional formatted log"
-    echo -e "    ${C_YELLOW}JSON Log:${C_RESET}    Machine-readable log"
-    echo ""
-    echo -e "${C_WHITE}NOTES:${C_RESET}"
-    echo "    - This script is for authorized purple team exercises only"
-    echo "    - All actions are logged for blue team analysis"
-    echo "    - EICAR test files are safe and standard for AV testing"
-    echo "    - Ransomware phase performs reconnaissance only (no encryption)"
-    echo ""
+init_logs() {
+    local ts
+    ts=$(date +%Y%m%d_%H%M%S)
+    LOG_FILE="/tmp/purpleteam_${ts}.log"
+    JSON_LOG="/tmp/purpleteam_${ts}.json"
+
+    {
+        printf '%s\n' "╔═══════════════════════════════════════════════════════════════════════╗"
+        printf '%s\n' "║               PURPLE TEAM AGENT v${SCRIPT_VERSION} — EXECUTION LOG                  ║"
+        printf '%s\n' "╚═══════════════════════════════════════════════════════════════════════╝"
+        printf '\n'
+        printf '  %-18s %s\n' "Start Time:" "$(date '+%Y-%m-%d %H:%M:%S %Z')"
+        printf '  %-18s %s\n' "Operator:" "$(whoami)"
+        printf '  %-18s %s\n' "Hostname:" "$(hostname)"
+        printf '  %-18s %s\n' "Log File:" "$LOG_FILE"
+        printf '  %-18s %s\n' "JSON Log:" "$JSON_LOG"
+        printf '\n'
+    } > "$LOG_FILE"
+
+    printf '[\n' > "$JSON_LOG"
 }
 
-list_phases() {
-    echo -e "${C_CYAN}"
-    cat << "EOF"
-╔══════════════════════════════════════════════════════════════════════════╗
-║                        AVAILABLE PHASES                                  ║
-╚══════════════════════════════════════════════════════════════════════════╝
-EOF
-    echo -e "${C_RESET}"
-    echo ""
-    echo -e "${C_WHITE}[1]${C_RESET}  ${C_GREEN}System Information Discovery${C_RESET}"
-    echo "     MITRE ATT&CK: T1082"
-    echo "     Description: Enumerate OS version, patches, security products"
-    echo "     Duration: ~15 seconds"
-    echo ""
-    echo -e "${C_WHITE}[2]${C_RESET}  ${C_GREEN}Account Discovery${C_RESET}"
-    echo "     MITRE ATT&CK: T1087.001, T1087.002"
-    echo "     Description: List local users, groups, and privileges"
-    echo "     Duration: ~20 seconds"
-    echo ""
-    echo -e "${C_WHITE}[3]${C_RESET}  ${C_GREEN}Process Discovery${C_RESET}"
-    echo "     MITRE ATT&CK: T1057, T1007"
-    echo "     Description: Enumerate running processes and services"
-    echo "     Duration: ~15 seconds"
-    echo ""
-    echo -e "${C_WHITE}[4]${C_RESET}  ${C_GREEN}File and Directory Discovery${C_RESET}"
-    echo "     MITRE ATT&CK: T1083"
-    echo "     Description: Search for sensitive files and directories"
-    echo "     Duration: ~25 seconds"
-    echo ""
-    echo -e "${C_WHITE}[5]${C_RESET}  ${C_GREEN}Credential Search${C_RESET}"
-    echo "     MITRE ATT&CK: T1552.001, T1555.003"
-    echo "     Description: Hunt for passwords and credential stores"
-    echo "     Duration: ~30 seconds"
-    echo ""
-    echo -e "${C_WHITE}[6]${C_RESET}  ${C_GREEN}Registry Enumeration${C_RESET}"
-    echo "     MITRE ATT&CK: T1012, T1518"
-    echo "     Description: Query registry for software and persistence"
-    echo "     Duration: ~20 seconds"
-    echo ""
-    echo -e "${C_WHITE}[7]${C_RESET}  ${C_GREEN}Network Discovery${C_RESET}"
-    echo "     MITRE ATT&CK: T1049, T1018, T1135, T1016"
-    echo "     Description: Map network topology and connections"
-    echo "     Duration: ~25 seconds"
-    echo ""
-    echo -e "${C_WHITE}[8]${C_RESET}  ${C_GREEN}Automated Collection${C_RESET}"
-    echo "     MITRE ATT&CK: T1119"
-    echo "     Description: Collect files for exfiltration"
-    echo "     Duration: ~20 seconds"
-    echo ""
-    echo -e "${C_WHITE}[9]${C_RESET}  ${C_GREEN}Persistence Reconnaissance${C_RESET}"
-    echo "     MITRE ATT&CK: T1547, T1053, T1543"
-    echo "     Description: Identify persistence mechanisms"
-    echo "     Duration: ~15 seconds"
-    echo ""
-    echo -e "${C_WHITE}[10]${C_RESET} ${C_MAGENTA}Ransomware-like Behavior${C_RESET}"
-    echo "     MITRE ATT&CK: T1486, T1490, T1489"
-    echo "     Description: Simulate ransomware TTPs (no encryption)"
-    echo "     Duration: ~30 seconds"
-    echo -e "     ${C_YELLOW}Note: Creates indicators only, no actual encryption${C_RESET}"
-    echo ""
-    echo -e "${C_WHITE}[11]${C_RESET} ${C_CYAN}EICAR AV Detection Test${C_RESET}"
-    echo "     Description: Test antivirus detection capabilities"
-    echo "     Duration: ~20 seconds"
-    echo -e "     ${C_YELLOW}Note: Uses safe EICAR test files${C_RESET}"
-    echo ""
-    echo -e "${C_GRAY}Total estimated time for all phases: ~4-5 minutes${C_RESET}"
-    echo ""
+log_text() {
+    local indent="$1"
+    shift
+    printf '%*s%s\n' "$indent" "" "$*" >> "$LOG_FILE"
+}
+
+log_json_event() {
+    local status="$1" technique="$2" phase="$3" description="$4" detail="$5"
+    local ts
+    ts=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+    local elapsed=$(($(date +%s) - START_TIME))
+
+    cat >> "$JSON_LOG" <<JSONEOF
+  {
+    "timestamp": "$ts",
+    "elapsed_seconds": $elapsed,
+    "phase": "$phase",
+    "status": "$status",
+    "technique": "$technique",
+    "description": $(printf '%s' "$description" | sed 's/\\/\\\\/g;s/"/\\"/g' | sed 's/.*/  "&"/'),
+    "detail": $(printf '%s' "${detail:-}" | sed 's/\\/\\\\/g;s/"/\\"/g' | sed 's/.*/  "&"/')
+  },
+JSONEOF
 }
 
 # ============================================================================
-# LOGGING FUNCTIONS
-# These functions handle dual output: colorful terminal and structured logs
+# TERMINAL OUTPUT FUNCTIONS
 # ============================================================================
 
-# Write structured entry to the main log file
-log_to_file() {
-    local level="$1"
-    local technique="$2"
-    local message="$3"
-    local timestamp=$(date '+%Y-%m-%d %H:%M:%S')
-    
-    echo "[$timestamp] [$level] [${technique:-GENERAL}] $message" >> "$LOG_FILE"
-}
-
-# Append JSON-formatted entry for machine parsing
-log_to_json() {
-    local status="$1"
-    local technique="$2"
-    local description="$3"
-    local timestamp=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
-    
-    cat >> "$JSON_LOG" <<EOF
-{
-  "timestamp": "$timestamp",
-  "status": "$status",
-  "technique": "$technique",
-  "description": "$description",
-  "execution_time": "$(($(date +%s) - START_TIME))"
-},
-EOF
-}
-
-# Print success message to terminal and log it
 print_success() {
     local message="$1"
-    local technique="${2:-INFO}"
-    echo -e "${C_GREEN}[${SYM_SUCCESS}]${C_RESET} ${C_WHITE}$message${C_RESET}"
-    log_to_file "SUCCESS" "$technique" "$message"
-    log_to_json "SUCCESS" "$technique" "$message"
+    local technique="${2:-}"
+    printf '%b[✓]%b %b%s%b\n' "$C_GREEN" "$C_RESET" "$C_WHITE" "$message" "$C_RESET"
+    log_text 4 "[SUCCESS] $message"
+    log_json_event "SUCCESS" "$technique" "$CURRENT_PHASE" "$message"
     ((SUCCESSFUL_ACTIONS++))
 }
 
-# Print error message to terminal and log it
 print_error() {
     local message="$1"
-    local technique="${2:-ERROR}"
-    echo -e "${C_RED}[${SYM_FAIL}]${C_RESET} ${C_RED}$message${C_RESET}"
-    log_to_file "ERROR" "$technique" "$message"
-    log_to_json "FAILED" "$technique" "$message"
+    local technique="${2:-}"
+    printf '%b[✗]%b %b%s%b\n' "$C_RED" "$C_RESET" "$C_RED" "$message" "$C_RESET"
+    log_text 4 "[FAILED]  $message"
+    log_json_event "FAILED" "$technique" "$CURRENT_PHASE" "$message"
     ((FAILED_ACTIONS++))
 }
 
-# Print warning message to terminal and log it
 print_warning() {
     local message="$1"
-    local technique="${2:-WARN}"
-    echo -e "${C_YELLOW}[${SYM_WARN}]${C_RESET} ${C_YELLOW}$message${C_RESET}"
-    log_to_file "WARNING" "$technique" "$message"
+    local technique="${2:-}"
+    printf '%b[!]%b %b%s%b\n' "$C_YELLOW" "$C_RESET" "$C_YELLOW" "$message" "$C_RESET"
+    log_text 4 "[WARNING] $message"
 }
 
-# Print informational message to terminal and log it
 print_info() {
     local message="$1"
-    local technique="${2:-INFO}"
-    echo -e "${C_CYAN}[${SYM_INFO}]${C_RESET} ${C_GRAY}$message${C_RESET}"
-    log_to_file "INFO" "$technique" "$message"
+    printf '%b[i]%b %b%s%b\n' "$C_BLUE" "$C_RESET" "$C_GRAY" "$message" "$C_RESET"
+    log_text 4 "[INFO]    $message"
 }
 
-# Print action message indicating something is being executed
 print_action() {
     local message="$1"
-    local technique="${2:-ACTION}"
-    echo -e "${C_MAGENTA}[${SYM_ACTION}]${C_RESET} ${C_MAGENTA}$message${C_RESET}"
-    log_to_file "ACTION" "$technique" "$message"
+    printf '%b[>]%b %b%s%b\n' "$C_MAGENTA" "$C_RESET" "$C_MAGENTA" "$message" "$C_RESET"
+    log_text 4 "[ACTION]  $message"
 }
 
-# Print a phase section header with visual separation
-print_section() {
-    local title="$1"
-    local technique="$2"
-    echo ""
-    echo -e "${C_CYAN}╔══════════════════════════════════════════════════════════════╗${C_RESET}"
-    echo -e "${C_CYAN}║${C_RESET} ${C_WHITE}$title${C_RESET}"
-    echo -e "${C_CYAN}║${C_RESET} ${C_GRAY}MITRE ATT&CK: $technique${C_RESET}"
-    echo -e "${C_CYAN}╚══════════════════════════════════════════════════════════════╝${C_RESET}"
-    echo ""
-    
-    # Write structured header to log file
-    log_to_file "PHASE_START" "$technique" "$title"
+print_detail() {
+    local message="$1"
+    printf '    %b%s%b\n' "$C_DIM" "$message" "$C_RESET"
+    log_text 8 "$message"
+}
+
+print_finding() {
+    local severity="$1" message="$2"
+    local color="$C_WHITE"
+    case "$severity" in
+        HIGH)     color="$C_RED" ;;
+        MEDIUM)   color="$C_YELLOW" ;;
+        LOW)      color="$C_CYAN" ;;
+        INFO)     color="$C_GRAY" ;;
+    esac
+    printf '    %b[%s]%b %s\n' "$color" "$severity" "$C_RESET" "$message"
+    log_text 8 "[FINDING:$severity] $message"
+    PHASE_FINDINGS+=("[$severity] $message")
+}
+
+# Phase section header with timing and technique mapping
+begin_phase() {
+    local number="$1" title="$2" techniques="$3" description="$4"
+    CURRENT_PHASE="Phase $number"
+    CURRENT_PHASE_START=$(date +%s)
+    PHASE_FINDINGS=()
+
+    printf '\n'
+    printf '%b╔══════════════════════════════════════════════════════════════════════╗%b\n' "$C_CYAN" "$C_RESET"
+    printf '%b║%b  %bPHASE %s: %s%b\n' "$C_CYAN" "$C_RESET" "$C_BOLD" "$number" "$title" "$C_RESET"
+    printf '%b║%b  %bMITRE ATT&CK: %s%b\n' "$C_CYAN" "$C_RESET" "$C_GRAY" "$techniques" "$C_RESET"
+    printf '%b║%b  %b%s%b\n' "$C_CYAN" "$C_RESET" "$C_DIM" "$description" "$C_RESET"
+    printf '%b╚══════════════════════════════════════════════════════════════════════╝%b\n' "$C_CYAN" "$C_RESET"
+    printf '\n'
+
     {
-        echo ""
-        echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-        echo "PHASE: $title"
-        echo "MITRE ATT&CK: $technique"
-        echo "Timestamp: $(date '+%Y-%m-%d %H:%M:%S')"
-        echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-        echo ""
+        printf '\n'
+        printf '  ══════════════════════════════════════════════════════════════════\n'
+        printf '  PHASE %s: %s\n' "$number" "$title"
+        printf '  Techniques: %s\n' "$techniques"
+        printf '  Started: %s\n' "$(date '+%Y-%m-%d %H:%M:%S')"
+        printf '  ──────────────────────────────────────────────────────────────────\n'
+        printf '\n'
+    } >> "$LOG_FILE"
+}
+
+end_phase() {
+    local phase_duration=$(( $(date +%s) - CURRENT_PHASE_START ))
+
+    if [ ${#PHASE_FINDINGS[@]} -gt 0 ]; then
+        printf '\n'
+        printf '  %b── Findings (%d) ──%b\n' "$C_WHITE" "${#PHASE_FINDINGS[@]}" "$C_RESET"
+        for f in "${PHASE_FINDINGS[@]}"; do
+            printf '  %s\n' "$f"
+        done
+    fi
+
+    printf '\n  %b%s completed in %ds%b\n' "$C_DIM" "$CURRENT_PHASE" "$phase_duration" "$C_RESET"
+
+    {
+        printf '\n'
+        printf '  ── Phase Findings (%d) ──\n' "${#PHASE_FINDINGS[@]}"
+        for f in "${PHASE_FINDINGS[@]}"; do
+            printf '    %s\n' "$f"
+        done
+        printf '  Duration: %ds\n' "$phase_duration"
+        printf '  ──────────────────────────────────────────────────────────────────\n'
     } >> "$LOG_FILE"
 }
 
 # ============================================================================
 # UTILITY FUNCTIONS
-# Helper functions for file operations and searching
 # ============================================================================
 
-# Safely search for files with timeout and result limiting
 safe_find() {
-    local path="$1"
-    local pattern="$2"
-    local max_results="${3:-20}"
-    
-    # Return early if directory doesn't exist
+    local path="$1" pattern="$2" max_results="${3:-20}"
     [ ! -d "$path" ] && return 1
-    
-    # Search with 10 second timeout and limit results
     timeout 10 find "$path" -type f -name "$pattern" 2>/dev/null | head -n "$max_results"
 }
 
-# Safely search file contents with timeout and result limiting
 safe_grep() {
-    local pattern="$1"
-    local path="$2"
-    local max_results="${3:-10}"
-    
-    # Return early if directory doesn't exist
+    local pattern="$1" path="$2" max_results="${3:-10}"
     [ ! -d "$path" ] && return 1
-    
-    # Search with 10 second timeout and limit results
     timeout 10 grep -r -i -l "$pattern" "$path" 2>/dev/null | head -n "$max_results"
 }
 
 # ============================================================================
 # POWERSHELL EXECUTION WRAPPER
-# This function handles all PowerShell command execution with proper
-# error handling, timeouts, and logging
 # ============================================================================
 
-execute_powershell() {
+execute_ps() {
     local command="$1"
     local technique="$2"
     local description="$3"
-    
+
     ((TOTAL_ACTIONS++))
-    
     print_action "$description"
-    
-    # Create temporary files for capturing output and errors
-    local temp_output=$(mktemp)
-    local temp_error=$(mktemp)
-    local exit_code=0
-    
-    # Execute PowerShell command with timeout
-    if timeout $TIMEOUT_SECONDS $POWERSHELL_CMD -NoProfile -NonInteractive -Command "$command" > "$temp_output" 2> "$temp_error"; then
+
+    local temp_out temp_err exit_code
+    temp_out=$(mktemp)
+    temp_err=$(mktemp)
+    exit_code=0
+
+    if timeout $TIMEOUT_SECONDS $POWERSHELL_CMD -NoProfile -NonInteractive -Command "$command" > "$temp_out" 2> "$temp_err"; then
         exit_code=0
     else
         exit_code=$?
     fi
-    
-    # Check if execution was successful and produced output
-    if [ $exit_code -eq 0 ] && [ -s "$temp_output" ]; then
-        print_success "$description completed" "$technique"
-        
-        # Write structured output to log file
+
+    if [ $exit_code -eq 0 ] && [ -s "$temp_out" ]; then
+        print_success "$description" "$technique"
+
         {
-            echo "  ┌─ Action: $description"
-            echo "  │  Technique: $technique"
-            echo "  │  Status: SUCCESS"
-            echo "  │  Timestamp: $(date '+%Y-%m-%d %H:%M:%S')"
-            echo "  │"
-            echo "  │  Output:"
-            sed 's/^/  │    /' "$temp_output"
-            echo "  └─"
-            echo ""
+            printf '    %s %s\n' "$B_TL$B_H" "$description"
+            printf '    %s  Technique: %s | Status: SUCCESS\n' "$B_V" "$technique"
+            printf '    %s\n' "$B_V"
+            sed 's/^/    │  /' "$temp_out"
+            printf '    %s\n' "$B_BL$B_H"
+            printf '\n'
         } >> "$LOG_FILE"
-        
-        rm -f "$temp_output" "$temp_error"
+
+        local line_count
+        line_count=$(wc -l < "$temp_out")
+        if [ "$line_count" -le 8 ]; then
+            while IFS= read -r line; do
+                print_detail "$line"
+            done < "$temp_out"
+        else
+            head -6 "$temp_out" | while IFS= read -r line; do
+                print_detail "$line"
+            done
+            print_detail "... ($line_count lines total, see log for full output)"
+        fi
+
+        rm -f "$temp_out" "$temp_err"
         return 0
     else
-        # Determine specific error message
         local error_msg="Failed"
-        [ -s "$temp_error" ] && error_msg="$(head -1 "$temp_error")"
+        [ -s "$temp_err" ] && error_msg=$(head -1 "$temp_err")
         [ $exit_code -eq 124 ] && error_msg="Timeout (${TIMEOUT_SECONDS}s)"
-        
-        print_error "$description failed: $error_msg" "$technique"
-        
-        # Write error details to log file
+
+        print_error "$description — $error_msg" "$technique"
+
         {
-            echo "  ┌─ Action: $description"
-            echo "  │  Technique: $technique"
-            echo "  │  Status: FAILED"
-            echo "  │  Error: $error_msg"
-            echo "  │  Timestamp: $(date '+%Y-%m-%d %H:%M:%S')"
-            echo "  └─"
-            echo ""
+            printf '    %s %s\n' "$B_TL$B_H" "$description"
+            printf '    %s  Technique: %s | Status: FAILED\n' "$B_V" "$technique"
+            printf '    %s  Error: %s\n' "$B_V" "$error_msg"
+            printf '    %s\n' "$B_BL$B_H"
+            printf '\n'
         } >> "$LOG_FILE"
-        
-        rm -f "$temp_output" "$temp_error"
+
+        rm -f "$temp_out" "$temp_err"
         return 1
     fi
 }
 
 # ============================================================================
 # ENVIRONMENT DETECTION
-# Verify we're running in WSL and can access Windows and PowerShell
 # ============================================================================
 
 detect_environment() {
-    print_section "Environment Detection" "T1082"
-    
-    # Check if running in WSL by examining /proc/version
-    if grep -qi microsoft /proc/version; then
-        if grep -qi "WSL2" /proc/version; then
+    begin_phase "0" "Environment Detection" "T1082" \
+        "Verify WSL runtime, Windows filesystem access, and PowerShell availability"
+
+    if grep -qi microsoft /proc/version 2>/dev/null; then
+        if grep -qi "WSL2" /proc/version 2>/dev/null; then
             WSL_VERSION="WSL2"
         else
             WSL_VERSION="WSL1"
@@ -402,10 +322,9 @@ detect_environment() {
         print_error "Not running in WSL environment" "T1082"
         exit 1
     fi
-    
-    # Locate Windows filesystem mount point
+
     if [ ! -d "$WINDOWS_SYSTEM" ]; then
-        print_warning "Standard mount /mnt/c not found, searching for Windows filesystem..."
+        print_warning "Standard mount /mnt/c not found, searching..."
         for mount in /mnt/*; do
             if [ -d "$mount/Windows" ]; then
                 WINDOWS_SYSTEM="$mount"
@@ -413,19 +332,16 @@ detect_environment() {
                 break
             fi
         done
-        
         if [ ! -d "$WINDOWS_SYSTEM/Windows" ]; then
             print_error "Cannot locate Windows filesystem" "T1082"
             exit 1
         fi
     fi
-    
     print_success "Windows filesystem accessible: $WINDOWS_SYSTEM" "T1082"
-    
-    # Determine which PowerShell executable is available
+
     if command -v powershell.exe &> /dev/null; then
         POWERSHELL_CMD="powershell.exe"
-        print_success "PowerShell.exe detected" "T1082"
+        print_success "PowerShell (Desktop) detected" "T1082"
     elif command -v pwsh.exe &> /dev/null; then
         POWERSHELL_CMD="pwsh.exe"
         print_success "PowerShell Core detected" "T1082"
@@ -433,694 +349,978 @@ detect_environment() {
         print_error "No PowerShell executable found" "T1082"
         exit 1
     fi
-    
-    # Test that PowerShell actually works
-    if ! timeout $TIMEOUT_SECONDS $POWERSHELL_CMD -Command "Write-Output 'test'" &> /dev/null; then
+
+    if ! timeout $TIMEOUT_SECONDS $POWERSHELL_CMD -NoProfile -Command "Write-Output 'test'" &> /dev/null; then
         print_error "PowerShell execution test failed" "T1082"
         exit 1
     fi
-    
     print_success "PowerShell execution verified" "T1082"
+
+    HOSTNAME_DETECTED=$($POWERSHELL_CMD -NoProfile -Command "hostname" 2>/dev/null | tr -d '\r')
+    USERNAME_DETECTED=$($POWERSHELL_CMD -NoProfile -Command '[System.Environment]::UserName' 2>/dev/null | tr -d '\r')
+    print_info "Target: ${USERNAME_DETECTED:-unknown}@${HOSTNAME_DETECTED:-unknown}"
+
+    end_phase
 }
 
 # ============================================================================
-# PHASE 1: SYSTEM INFORMATION DISCOVERY
-# Gather information about the target Windows system
+# PHASE 1: SYSTEM & ENVIRONMENT PROFILING
+# APT fingerprinting: OS details, virtualisation, security stack, locale
 # ============================================================================
 
 phase_system_discovery() {
-    print_section "PHASE 1: System Information Discovery" "T1082"
-    
-    # Get basic OS version information
-    execute_powershell \
-        "[System.Environment]::OSVersion | Format-List" \
+    begin_phase 1 "System & Environment Profiling" \
+        "T1082, T1497.001, T1614, T1614.001" \
+        "Fingerprint the target: OS, hardware, virtualisation, language, security stack"
+
+    execute_ps \
+        "[System.Environment]::OSVersion | Format-List; Get-ComputerInfo | Select-Object CsName,WindowsVersion,WindowsBuildLabEx,OsArchitecture,OsTotalVisibleMemorySize,OsLanguage,TimeZone | Format-List" \
         "T1082" \
-        "Querying Windows OS version"
-    
-    # Get detailed computer information
-    execute_powershell \
-        "Get-ComputerInfo | Select-Object CsName,WindowsVersion,OsArchitecture,OsTotalVisibleMemorySize | Format-List" \
+        "Collecting OS version, architecture, language, and timezone"
+
+    execute_ps \
+        "Get-HotFix | Sort-Object -Property InstalledOn -Descending -ErrorAction SilentlyContinue | Select-Object -First 15 HotFixID,Description,InstalledOn | Format-Table -AutoSize" \
         "T1082" \
-        "Collecting system information"
-    
-    # Check Windows Defender status
-    execute_powershell \
-        "Get-MpComputerStatus | Select-Object AntivirusEnabled,RealTimeProtectionEnabled,IoavProtectionEnabled | Format-List" \
-        "T1082" \
-        "Checking Windows Defender status"
-    
-    # List recent security patches
-    execute_powershell \
-        "Get-HotFix | Select-Object -First 10 HotFixID,Description,InstalledOn | Format-Table" \
-        "T1082" \
-        "Enumerating installed hotfixes"
-    
-    # Check how long system has been running
-    execute_powershell \
-        "(Get-Date) - (gcim Win32_OperatingSystem).LastBootUpTime" \
+        "Enumerating recent security patches"
+
+    execute_ps \
+        "(Get-Date) - (Get-CimInstance Win32_OperatingSystem).LastBootUpTime | Select-Object Days,Hours,Minutes | Format-List" \
         "T1082" \
         "Checking system uptime"
+
+    execute_ps \
+        "Get-WmiObject Win32_ComputerSystem | Select-Object Model,Manufacturer,HypervisorPresent,PartOfDomain,Domain | Format-List" \
+        "T1497.001" \
+        "Detecting virtualisation and domain membership"
+
+    execute_ps \
+        "Get-WmiObject Win32_BIOS | Select-Object SMBIOSBIOSVersion,Manufacturer,SerialNumber | Format-List" \
+        "T1497.001" \
+        "BIOS fingerprint (sandbox/VM indicator)"
+
+    execute_ps \
+        "Get-MpComputerStatus -ErrorAction SilentlyContinue | Select-Object AntivirusEnabled,RealTimeProtectionEnabled,BehaviorMonitorEnabled,IoavProtectionEnabled,NISEnabled,AntivirusSignatureLastUpdated | Format-List" \
+        "T1518.001" \
+        "Windows Defender status and signature age"
+
+    execute_ps \
+        "Get-Service | Where-Object {\$_.DisplayName -match 'Defender|CrowdStrike|Carbon Black|SentinelOne|Sophos|Symantec|McAfee|ESET|Kaspersky|Trend Micro|Palo Alto|Cylance|Elastic|Splunk|Sysmon'} | Select-Object Name,DisplayName,Status | Format-Table -AutoSize" \
+        "T1518.001" \
+        "Enumerating security products (EDR/AV/SIEM agents)"
+
+    execute_ps \
+        "Get-WinSystemLocale | Format-List; Get-Culture | Select-Object Name,DisplayName | Format-List; (Get-TimeZone).DisplayName" \
+        "T1614.001" \
+        "System locale and timezone (geopolitical targeting context)"
+
+    execute_ps \
+        "Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System' -ErrorAction SilentlyContinue | Select-Object EnableLUA,ConsentPromptBehaviorAdmin,FilterAdministratorToken | Format-List" \
+        "T1082" \
+        "UAC configuration"
+
+    end_phase
 }
 
 # ============================================================================
-# PHASE 2: ACCOUNT DISCOVERY
-# Enumerate user accounts, groups, and privileges
+# PHASE 2: ACCOUNT & PRIVILEGE DISCOVERY
+# Domain-aware enumeration for lateral movement planning
 # ============================================================================
 
 phase_account_discovery() {
-    print_section "PHASE 2: Account Discovery" "T1087"
-    
-    # List all local user accounts
-    execute_powershell \
-        "Get-LocalUser | Select-Object Name,Enabled,LastLogon,PasswordLastSet | Format-Table -AutoSize" \
+    begin_phase 2 "Account & Privilege Discovery" \
+        "T1087.001, T1087.002, T1069.001, T1069.002, T1201, T1033" \
+        "Enumerate local/domain accounts, groups, privileges, and password policy"
+
+    execute_ps \
+        "whoami /all" \
+        "T1033" \
+        "Current user identity, groups, and privileges"
+
+    execute_ps \
+        "Get-LocalUser | Select-Object Name,Enabled,LastLogon,PasswordLastSet,PasswordExpires,AccountExpires,Description | Format-Table -AutoSize" \
         "T1087.001" \
         "Enumerating local user accounts"
-    
-    # Get detailed information about current user
-    execute_powershell \
-        "whoami /all" \
-        "T1087" \
-        "Gathering current user privileges"
-    
-    # List members of local Administrators group
-    execute_powershell \
-        "Get-LocalGroupMember -Group 'Administrators' 2>\$null" \
-        "T1087.001" \
-        "Enumerating local administrators"
-    
-    # List all local groups
-    execute_powershell \
-        "Get-LocalGroup | Select-Object Name,Description | Format-Table" \
-        "T1087.001" \
-        "Enumerating local groups"
-    
-    # Check if system is joined to a domain
-    execute_powershell \
-        "(Get-WmiObject -Class Win32_ComputerSystem).PartOfDomain" \
+
+    execute_ps \
+        "Get-LocalGroupMember -Group 'Administrators' -ErrorAction SilentlyContinue | Select-Object Name,ObjectClass,PrincipalSource | Format-Table -AutoSize" \
+        "T1069.001" \
+        "Members of local Administrators group"
+
+    execute_ps \
+        "Get-LocalGroup | Select-Object Name,Description | Format-Table -AutoSize" \
+        "T1069.001" \
+        "Enumerating all local groups"
+
+    execute_ps \
+        "Get-LocalGroupMember -Group 'Remote Desktop Users' -ErrorAction SilentlyContinue | Select-Object Name,ObjectClass | Format-Table -AutoSize" \
+        "T1069.001" \
+        "Remote Desktop Users (lateral movement targets)"
+
+    execute_ps \
+        "net accounts 2>\$null" \
+        "T1201" \
+        "Local password policy (lockout threshold, min length, history)"
+
+    execute_ps \
+        "Get-WmiObject Win32_ComputerSystem | Select-Object PartOfDomain,Domain,DomainRole | Format-List" \
         "T1087.002" \
-        "Checking domain membership status"
+        "Domain membership and role"
+
+    execute_ps \
+        "try { \$searcher = [adsisearcher]'(&(objectCategory=person)(objectClass=user)(adminCount=1))'; \$searcher.FindAll() | ForEach-Object { \$_.Properties['samaccountname'] } | Select-Object -First 20 } catch { Write-Output 'Domain enumeration not available (workgroup or access denied)' }" \
+        "T1087.002" \
+        "Domain admin accounts (LDAP adminCount=1)"
+
+    execute_ps \
+        "try { nltest /dclist:\$env:USERDOMAIN 2>\$null } catch { Write-Output 'Domain controller enumeration not available' }" \
+        "T1018" \
+        "Domain controller enumeration"
+
+    execute_ps \
+        "Get-WmiObject Win32_LoggedOnUser -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Dependent | Select-Object -Property Name -Unique | Select-Object -First 10 | Format-Table" \
+        "T1033" \
+        "Currently logged-on users"
+
+    execute_ps \
+        "try { net accounts /domain 2>\$null } catch { Write-Output 'Domain password policy not available' }" \
+        "T1201" \
+        "Domain password policy"
+
+    end_phase
 }
 
 # ============================================================================
-# PHASE 3: PROCESS DISCOVERY
-# Identify running processes and services
+# PHASE 3: PROCESS & SERVICE INTELLIGENCE
+# Identify security tools, financial apps, and opportunities
 # ============================================================================
 
 phase_process_discovery() {
-    print_section "PHASE 3: Process Discovery" "T1057"
-    
-    # List all running processes
-    execute_powershell \
-        "Get-Process | Select-Object Name,Id,Path,Company | Sort-Object Name | Format-Table -AutoSize" \
+    begin_phase 3 "Process & Service Intelligence" \
+        "T1057, T1007, T1518.001, T1497.001" \
+        "Map running processes — security tools, financial applications, analysis tools"
+
+    execute_ps \
+        "Get-Process | Select-Object Name,Id,Path,Company,CPU,WorkingSet64 | Sort-Object CPU -Descending | Select-Object -First 30 | Format-Table -AutoSize" \
         "T1057" \
-        "Listing all running processes"
-    
-    # Specifically look for security software
-    execute_powershell \
-        "Get-Process | Where-Object {\$_.Name -match 'defender|msmpeng|mssense|windefend|sense|av|edr|crowdstrike|carbon|sentinel|sophos|symantec|mcafee|kaspersky|avast|avg'} | Select-Object Name,Id,Path | Format-Table" \
+        "Top processes by CPU (anomaly baseline)"
+
+    execute_ps \
+        "Get-Process | Where-Object {\$_.Name -match 'MsMpEng|MsSense|SenseIR|SenseCncProxy|WinDefend|csfalcon|CSFalconService|CSFalconContainer|cb|CbDefense|RepMgr|SentinelAgent|SentinelOne|sophos|SAVService|hmpalert|SEP|ccSvcHst|SymCorpUI|mcshield|mfemms|ESET|ekrn|avp|kavfs|TMCCSvc|Traps|CortexXDR|CylanceSvc|elastic-agent|filebeat|winlogbeat|splunkd|ossec'} | Select-Object Name,Id,Path | Format-Table -AutoSize" \
+        "T1518.001" \
+        "Security software process enumeration (EDR/AV/SIEM)"
+
+    execute_ps \
+        "Get-Process | Where-Object {\$_.Name -match 'wireshark|procmon|procexp|x64dbg|x32dbg|ollydbg|ida|ghidra|fiddler|burp|charles|dnspy|pestudio|hxd|sysinternals'} | Select-Object Name,Id | Format-Table" \
+        "T1497.001" \
+        "Analysis/debugging tools detection (analyst watching?)"
+
+    execute_ps \
+        "Get-Process | Where-Object {\$_.Name -match 'outlook|teams|slack|zoom|skype|webex|firefox|chrome|msedge|iexplore|thunderbird'} | Select-Object Name,Id | Format-Table" \
         "T1057" \
-        "Identifying security software processes"
-    
-    # List running Windows services
-    execute_powershell \
-        "Get-Service | Where-Object {\$_.Status -eq 'Running'} | Select-Object Name,DisplayName,Status | Format-Table -AutoSize" \
+        "Communication and browser processes"
+
+    execute_ps \
+        "Get-Process | Where-Object {\$_.Name -match 'sql|oracle|swift|bloomberg|reuters|trading|fidelity|schwab|citi|chase|sap|sage|quickbooks|dynamics|navision|workday|peoplesoft'} | Select-Object Name,Id,Path | Format-Table" \
+        "T1057" \
+        "Financial / ERP / trading application processes"
+
+    execute_ps \
+        "Get-Service | Where-Object {\$_.Status -eq 'Running'} | Select-Object Name,DisplayName,StartType | Sort-Object DisplayName | Format-Table -AutoSize" \
         "T1007" \
-        "Enumerating running services"
+        "All running services"
+
+    execute_ps \
+        "Get-Service | Where-Object {\$_.DisplayName -match 'Defender|Firewall|Update|Sense|SmartScreen|DLP|Endpoint|Audit|Sysmon'} | Select-Object Name,DisplayName,Status,StartType | Format-Table -AutoSize" \
+        "T1007" \
+        "Security-relevant services status"
+
+    end_phase
 }
 
 # ============================================================================
-# PHASE 4: FILE AND DIRECTORY DISCOVERY
-# Search for interesting files and directories
+# PHASE 4: FILE & DIRECTORY DISCOVERY
+# Sensitive document hunting: financial data, keys, configs, databases
 # ============================================================================
 
 phase_file_discovery() {
-    print_section "PHASE 4: File and Directory Discovery" "T1083"
-    
+    begin_phase 4 "Sensitive File & Directory Discovery" \
+        "T1083, T1005, T1552.001" \
+        "Hunt for financial documents, certificates, configs, credential files, databases"
+
     ((TOTAL_ACTIONS++))
-    print_action "Searching for interesting files in user directories..."
-    
+    print_action "Searching user directories for sensitive documents..."
+
     local found_files=0
-    local search_patterns=("*.txt" "*.pdf" "*.doc" "*.docx" "*.xls" "*.xlsx")
+    local search_patterns=(
+        "*.pdf" "*.doc" "*.docx" "*.xls" "*.xlsx" "*.pptx"
+        "*.csv" "*.mdb" "*.accdb" "*.sqlite" "*.kdbx"
+        "*.pfx" "*.p12" "*.pem" "*.cer" "*.key"
+        "*.rdp" "*.ovpn" "*.conf" "*.config" "*.ini" "*.env"
+    )
     local search_locations=(
         "$WINDOWS_SYSTEM/Users/*/Desktop"
         "$WINDOWS_SYSTEM/Users/*/Documents"
         "$WINDOWS_SYSTEM/Users/*/Downloads"
+        "$WINDOWS_SYSTEM/Users/*/OneDrive"
     )
-    
-    # Start logging file discovery results
+
     {
-        echo "  ┌─ File Discovery Results"
-        echo "  │"
+        printf '    %s File Discovery Scan\n' "$B_TL$B_H"
+        printf '    %s\n' "$B_V"
     } >> "$LOG_FILE"
-    
-    # Search each location for each file pattern
+
     for location in "${search_locations[@]}"; do
-        if [ -d "$location" ]; then
+        if [ -d "$location" ] 2>/dev/null; then
             for pattern in "${search_patterns[@]}"; do
                 while IFS= read -r file; do
-                    echo "  │  [FOUND] $file" >> "$LOG_FILE"
+                    printf '    %s  [FOUND] %s\n' "$B_V" "$file" >> "$LOG_FILE"
                     ((found_files++))
                 done < <(safe_find "$location" "$pattern" 10)
             done
         fi
     done
-    
-    # Close file discovery log section
+
     {
-        echo "  │"
-        echo "  │  Total files found: $found_files"
-        echo "  └─"
-        echo ""
+        printf '    %s\n' "$B_V"
+        printf '    %s  Total files found: %d\n' "$B_V" "$found_files"
+        printf '    %s\n' "$B_BL$B_H"
+        printf '\n'
     } >> "$LOG_FILE"
-    
+
     if [ $found_files -gt 0 ]; then
-        print_success "Found $found_files interesting files" "T1083"
+        print_success "Found $found_files sensitive files across user directories" "T1083"
+        print_finding "MEDIUM" "$found_files sensitive files accessible from WSL"
     else
-        print_error "No accessible files found" "T1083"
+        print_info "No accessible files found in user directories"
+        ((FAILED_ACTIONS++))
     fi
-    
-    # Search for SSH keys which may contain credentials
+
+    # SSH keys
     ((TOTAL_ACTIONS++))
-    print_action "Searching for SSH keys..."
-    
+    print_action "Hunting for SSH keys and config..."
     local ssh_found=0
     for ssh_dir in "$WINDOWS_SYSTEM/Users/"*/.ssh; do
         if [ -d "$ssh_dir" ]; then
             {
-                echo "  ┌─ SSH Directory Found"
-                echo "  │  Location: $ssh_dir"
-                echo "  │  Contents:"
-                ls -la "$ssh_dir" 2>/dev/null | sed 's/^/  │    /'
-                echo "  └─"
-                echo ""
+                printf '    %s SSH Directory: %s\n' "$B_TL$B_H" "$ssh_dir"
+                ls -la "$ssh_dir" 2>/dev/null | sed "s/^/    $B_V  /"
+                printf '    %s\n' "$B_BL$B_H"
             } >> "$LOG_FILE"
             ((ssh_found++))
         fi
     done
-    
     if [ $ssh_found -gt 0 ]; then
-        print_success "Found $ssh_found SSH directories" "T1083"
+        print_success "Found $ssh_found SSH directories" "T1552.004"
+        print_finding "HIGH" "SSH key directories accessible — potential lateral movement keys"
     else
         print_info "No SSH directories found"
         ((FAILED_ACTIONS++))
     fi
+
+    # KeePass / password manager databases
+    ((TOTAL_ACTIONS++))
+    print_action "Searching for password manager databases..."
+    local kp_found=0
+    while IFS= read -r f; do
+        print_detail "Password DB: $f"
+        ((kp_found++))
+    done < <(safe_find "$WINDOWS_SYSTEM/Users" "*.kdbx" 5)
+    if [ $kp_found -gt 0 ]; then
+        print_success "Found $kp_found password manager databases" "T1555"
+        print_finding "HIGH" "KeePass databases found — master password attack surface"
+    else
+        print_info "No password manager databases found"
+        ((SKIPPED_ACTIONS++))
+    fi
+
+    # Certificate files
+    execute_ps \
+        "Get-ChildItem -Path C:\Users -Recurse -Include *.pfx,*.p12,*.pem,*.cer,*.key -ErrorAction SilentlyContinue | Select-Object -First 15 FullName,Length,LastWriteTime | Format-Table -AutoSize" \
+        "T1552.004" \
+        "Certificate and private key files"
+
+    # RDP connection files
+    execute_ps \
+        "Get-ChildItem -Path C:\Users -Recurse -Include *.rdp -ErrorAction SilentlyContinue | Select-Object -First 10 FullName,LastWriteTime | Format-Table" \
+        "T1083" \
+        "RDP connection files (lateral movement targets)"
+
+    # Recently accessed files
+    execute_ps \
+        "Get-ChildItem -Path 'C:\Users\*\AppData\Roaming\Microsoft\Windows\Recent' -ErrorAction SilentlyContinue | Sort-Object LastWriteTime -Descending | Select-Object -First 15 Name,LastWriteTime | Format-Table" \
+        "T1083" \
+        "Recently accessed files (user activity profiling)"
+
+    end_phase
 }
 
 # ============================================================================
-# PHASE 5: CREDENTIAL SEARCH
-# Hunt for passwords and credential stores
+# PHASE 5: CREDENTIAL ACCESS RECONNAISSANCE
+# Map all credential stores and harvest paths without extraction
 # ============================================================================
 
 phase_credential_search() {
-    print_section "PHASE 5: Credential Search" "T1552.001"
-    
+    begin_phase 5 "Credential Access Reconnaissance" \
+        "T1552.001, T1555.003, T1555.004, T1003.001, T1552.006, T1555" \
+        "Map credential stores: browsers, vault, LSASS, SAM, cached creds, cloud tokens"
+
+    # Files containing credential keywords
     ((TOTAL_ACTIONS++))
-    print_action "Hunting for credentials in files..."
-    
-    # Common keywords that indicate credential information
-    local cred_keywords=("password" "passwd" "pwd" "credential" "secret" "token" "api_key")
+    print_action "Scanning for plaintext credentials in user files..."
+    local cred_keywords=("password" "passwd" "secret" "token" "api_key" "apikey" "connection_string" "jdbc:" "sqlplus")
     local found_creds=0
-    
+
     {
-        echo "  ┌─ Credential Search Results"
-        echo "  │"
+        printf '    %s Credential Keyword Scan\n' "$B_TL$B_H"
+        printf '    %s\n' "$B_V"
     } >> "$LOG_FILE"
-    
-    # Search for files containing credential keywords
+
     for keyword in "${cred_keywords[@]}"; do
         while IFS= read -r file; do
-            echo "  │  [POTENTIAL] $file (keyword: $keyword)" >> "$LOG_FILE"
+            printf '    %s  [%s] %s\n' "$B_V" "$keyword" "$file" >> "$LOG_FILE"
             ((found_creds++))
         done < <(safe_grep "$keyword" "$WINDOWS_SYSTEM/Users/*/Documents" 5)
+        while IFS= read -r file; do
+            printf '    %s  [%s] %s\n' "$B_V" "$keyword" "$file" >> "$LOG_FILE"
+            ((found_creds++))
+        done < <(safe_grep "$keyword" "$WINDOWS_SYSTEM/Users/*/Desktop" 3)
     done
-    
+
     {
-        echo "  │"
-        echo "  │  Total potential credential files: $found_creds"
-        echo "  └─"
-        echo ""
+        printf '    %s\n' "$B_V"
+        printf '    %s  Potential credential files: %d\n' "$B_V" "$found_creds"
+        printf '    %s\n' "$B_BL$B_H"
     } >> "$LOG_FILE"
-    
+
     if [ $found_creds -gt 0 ]; then
-        print_success "Found $found_creds potential credential files" "T1552.001"
+        print_success "Found $found_creds files containing credential keywords" "T1552.001"
+        print_finding "HIGH" "$found_creds files with embedded credentials/tokens"
     else
-        print_info "No credential files found"
+        print_info "No plaintext credential files found"
         ((FAILED_ACTIONS++))
     fi
-    
-    # Check for Chrome's credential database
-    execute_powershell \
-        "Get-ChildItem 'C:\Users\*\AppData\Local\Google\Chrome\User Data\Default\Login Data' -ErrorAction SilentlyContinue | Select-Object FullName,Length,LastWriteTime" \
+
+    # Browser credential stores
+    execute_ps \
+        "Get-ChildItem 'C:\Users\*\AppData\Local\Google\Chrome\User Data\Default\Login Data' -ErrorAction SilentlyContinue | Select-Object FullName,Length,LastWriteTime | Format-Table; Get-ChildItem 'C:\Users\*\AppData\Local\Google\Chrome\User Data\Default\Cookies' -ErrorAction SilentlyContinue | Select-Object FullName,Length,LastWriteTime | Format-Table" \
         "T1555.003" \
-        "Checking for Chrome credential database"
-    
-    # Check for PowerShell command history which may contain credentials
-    execute_powershell \
-        "Get-ChildItem 'C:\Users\*\AppData\Roaming\Microsoft\Windows\PowerShell\PSReadLine\ConsoleHost_history.txt' -ErrorAction SilentlyContinue | Select-Object FullName,Length,LastWriteTime" \
+        "Chrome credential and cookie databases"
+
+    execute_ps \
+        "Get-ChildItem 'C:\Users\*\AppData\Roaming\Mozilla\Firefox\Profiles\*\logins.json' -ErrorAction SilentlyContinue | Select-Object FullName,Length | Format-Table; Get-ChildItem 'C:\Users\*\AppData\Roaming\Mozilla\Firefox\Profiles\*\key*.db' -ErrorAction SilentlyContinue | Select-Object FullName | Format-Table" \
+        "T1555.003" \
+        "Firefox credential databases"
+
+    execute_ps \
+        "Get-ChildItem 'C:\Users\*\AppData\Local\Microsoft\Edge\User Data\Default\Login Data' -ErrorAction SilentlyContinue | Select-Object FullName,Length,LastWriteTime | Format-Table" \
+        "T1555.003" \
+        "Edge credential database"
+
+    # Windows Credential Manager
+    execute_ps \
+        "cmdkey /list 2>\$null" \
+        "T1555.004" \
+        "Windows Credential Manager stored credentials"
+
+    # PowerShell history
+    execute_ps \
+        "Get-ChildItem 'C:\Users\*\AppData\Roaming\Microsoft\Windows\PowerShell\PSReadLine\ConsoleHost_history.txt' -ErrorAction SilentlyContinue | ForEach-Object { Write-Output ('History: ' + \$_.FullName + ' (Size: ' + \$_.Length + ')'); Get-Content \$_.FullName -Tail 30 -ErrorAction SilentlyContinue | Select-String -Pattern 'password|secret|token|key|credential|connect' -SimpleMatch }" \
         "T1552.001" \
-        "Checking for PowerShell history file"
+        "PowerShell history — credential keywords"
+
+    # LSASS accessibility check
+    execute_ps \
+        "Get-Process lsass -ErrorAction SilentlyContinue | Select-Object Id,HandleCount,WorkingSet64 | Format-List; \$lsass = Get-Process lsass -ErrorAction SilentlyContinue; if (\$lsass) { Write-Output \"LSASS PID: \$(\$lsass.Id) — credential extraction target\" }" \
+        "T1003.001" \
+        "LSASS process accessibility (credential dump target)"
+
+    # SAM / SYSTEM hive accessibility
+    execute_ps \
+        "Test-Path 'C:\Windows\System32\config\SAM'; Test-Path 'C:\Windows\System32\config\SYSTEM'; icacls 'C:\Windows\System32\config\SAM' 2>\$null | Select-Object -First 5" \
+        "T1003.002" \
+        "SAM/SYSTEM hive accessibility"
+
+    # Cached domain credentials
+    execute_ps \
+        "Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon' -ErrorAction SilentlyContinue | Select-Object DefaultUserName,DefaultDomainName,AutoAdminLogon,CachedLogonsCount | Format-List" \
+        "T1003.005" \
+        "Cached logon credentials and auto-logon config"
+
+    # Cloud credential files
+    ((TOTAL_ACTIONS++))
+    print_action "Scanning for cloud provider credential files..."
+    local cloud_found=0
+    local cloud_paths=(
+        "$WINDOWS_SYSTEM/Users/*/.aws/credentials"
+        "$WINDOWS_SYSTEM/Users/*/.azure/accessTokens.json"
+        "$WINDOWS_SYSTEM/Users/*/.config/gcloud/credentials.db"
+        "$WINDOWS_SYSTEM/Users/*/.config/gcloud/application_default_credentials.json"
+    )
+    for cpath in "${cloud_paths[@]}"; do
+        for f in $cpath; do
+            if [ -f "$f" ] 2>/dev/null; then
+                print_detail "Cloud cred: $f"
+                log_text 8 "[CLOUD CRED] $f"
+                ((cloud_found++))
+            fi
+        done
+    done
+    if [ $cloud_found -gt 0 ]; then
+        print_success "Found $cloud_found cloud credential files" "T1552.001"
+        print_finding "HIGH" "Cloud provider credentials accessible (AWS/Azure/GCP)"
+    else
+        print_info "No cloud credential files found"
+        ((SKIPPED_ACTIONS++))
+    fi
+
+    # WiFi passwords
+    execute_ps \
+        "netsh wlan show profiles 2>\$null | Select-String 'All User Profile' | ForEach-Object { \$p = (\$_ -split ':')[1].Trim(); Write-Output \"Profile: \$p\" }" \
+        "T1552.006" \
+        "Saved WiFi profiles (password extraction targets)"
+
+    end_phase
 }
 
 # ============================================================================
-# PHASE 6: REGISTRY ENUMERATION
-# Query Windows Registry for software and persistence mechanisms
+# PHASE 6: DEFENSE EVASION RECONNAISSANCE
+# Understand what the blue team can see, find blind spots
 # ============================================================================
 
-phase_registry_query() {
-    print_section "PHASE 6: Registry Enumeration" "T1012, T1518"
-    
-    # List installed software from registry
-    execute_powershell \
-        "Get-ItemProperty 'HKLM:\Software\Microsoft\Windows\CurrentVersion\Uninstall\*' | Select-Object DisplayName,DisplayVersion,Publisher,InstallDate | Where-Object {\$_.DisplayName} | Sort-Object DisplayName | Format-Table -AutoSize" \
-        "T1518" \
-        "Enumerating installed software from registry"
-    
-    # Check system-wide Run key for persistence
-    execute_powershell \
-        "Get-ItemProperty -Path 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Run' -ErrorAction SilentlyContinue | Format-List" \
-        "T1012" \
-        "Checking HKLM Run registry key"
-    
-    # Check user-specific Run key for persistence
-    execute_powershell \
-        "Get-ItemProperty -Path 'HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Run' -ErrorAction SilentlyContinue | Format-List" \
-        "T1012" \
-        "Checking HKCU Run registry key"
-    
-    # Get Windows version details from registry
-    execute_powershell \
-        "Get-ItemProperty -Path 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion' | Select-Object ProductName,CurrentVersion,CurrentBuild | Format-List" \
-        "T1012" \
-        "Querying Windows version from registry"
+phase_defense_evasion_recon() {
+    begin_phase 6 "Defense Evasion Reconnaissance" \
+        "T1562.001, T1562.004, T1218, T1036, T1027" \
+        "Map security controls, logging config, AMSI, AppLocker, firewall rules"
+
+    # PowerShell logging configuration
+    execute_ps \
+        "Get-ItemProperty 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\PowerShell\ScriptBlockLogging' -ErrorAction SilentlyContinue | Format-List; Get-ItemProperty 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\PowerShell\ModuleLogging' -ErrorAction SilentlyContinue | Format-List; Get-ItemProperty 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\PowerShell\Transcription' -ErrorAction SilentlyContinue | Format-List" \
+        "T1562.001" \
+        "PowerShell logging configuration (ScriptBlock, Module, Transcription)"
+
+    # Sysmon presence and config
+    execute_ps \
+        "\$svc = Get-Service Sysmon* -ErrorAction SilentlyContinue; if (\$svc) { \$svc | Format-List Name,DisplayName,Status; Get-ItemProperty 'HKLM:\SYSTEM\CurrentControlSet\Services\SysmonDrv' -ErrorAction SilentlyContinue | Select-Object ImagePath | Format-List } else { Write-Output 'Sysmon not installed' }" \
+        "T1518.001" \
+        "Sysmon presence and driver path"
+
+    # Windows Firewall rules
+    execute_ps \
+        "Get-NetFirewallProfile | Select-Object Name,Enabled,DefaultInboundAction,DefaultOutboundAction,LogAllowed,LogBlocked,LogFileName | Format-Table -AutoSize" \
+        "T1562.004" \
+        "Windows Firewall profile status"
+
+    execute_ps \
+        "Get-NetFirewallRule -Direction Inbound -Enabled True -Action Allow -ErrorAction SilentlyContinue | Select-Object -First 20 DisplayName,Profile,Protocol,LocalPort | Format-Table -AutoSize" \
+        "T1562.004" \
+        "Inbound firewall allow rules (attack surface)"
+
+    # AppLocker policy
+    execute_ps \
+        "Get-AppLockerPolicy -Effective -ErrorAction SilentlyContinue | Select-Object -ExpandProperty RuleCollections | Select-Object -First 10 | Format-Table" \
+        "T1562.001" \
+        "AppLocker policy (application whitelisting)"
+
+    # AMSI providers
+    execute_ps \
+        "Get-ChildItem 'HKLM:\SOFTWARE\Microsoft\AMSI\Providers' -ErrorAction SilentlyContinue | ForEach-Object { Write-Output \"AMSI Provider: \$(\$_.PSChildName)\" }" \
+        "T1562.001" \
+        "AMSI providers (anti-malware scan interface)"
+
+    # Event log sizes and retention
+    execute_ps \
+        "Get-WinEvent -ListLog Security,System,Application,'Microsoft-Windows-Sysmon/Operational','Microsoft-Windows-PowerShell/Operational' -ErrorAction SilentlyContinue | Select-Object LogName,IsEnabled,MaximumSizeInBytes,RecordCount,LogMode | Format-Table -AutoSize" \
+        "T1562.002" \
+        "Event log configuration (size, retention, status)"
+
+    # Audit policy
+    execute_ps \
+        "auditpol /get /category:* 2>\$null | Select-String -Pattern 'Success|Failure' | Select-Object -First 20" \
+        "T1562.002" \
+        "Windows audit policy settings"
+
+    # WDAC / Device Guard
+    execute_ps \
+        "Get-CimInstance -ClassName Win32_DeviceGuard -Namespace 'root\Microsoft\Windows\DeviceGuard' -ErrorAction SilentlyContinue | Select-Object * | Format-List" \
+        "T1562.001" \
+        "Device Guard / WDAC status"
+
+    # Constrained Language Mode check
+    execute_ps \
+        "\$ExecutionContext.SessionState.LanguageMode" \
+        "T1562.001" \
+        "PowerShell language mode (constrained = hardened)"
+
+    # LSA protection
+    execute_ps \
+        "Get-ItemProperty 'HKLM:\SYSTEM\CurrentControlSet\Control\Lsa' -ErrorAction SilentlyContinue | Select-Object RunAsPPL,LimitBlankPasswordUse,NoLMHash,RestrictAnonymous | Format-List" \
+        "T1003" \
+        "LSA protection and credential hardening"
+
+    end_phase
 }
 
 # ============================================================================
-# PHASE 7: NETWORK DISCOVERY
-# Map network configuration and active connections
+# PHASE 7: NETWORK TOPOLOGY & LATERAL MOVEMENT RECON
+# Map the network for pivot points, domain trusts, internal services
 # ============================================================================
 
 phase_network_discovery() {
-    print_section "PHASE 7: Network Discovery" "T1049, T1018, T1135"
-    
-    # List all established network connections
-    execute_powershell \
-        "Get-NetTCPConnection | Where-Object {\$_.State -eq 'Established'} | Select-Object LocalAddress,LocalPort,RemoteAddress,RemotePort,State,OwningProcess | Format-Table -AutoSize" \
+    begin_phase 7 "Network Topology & Lateral Movement Recon" \
+        "T1049, T1018, T1016, T1135, T1046, T1482" \
+        "Map network interfaces, connections, shares, trusts, and pivot points"
+
+    execute_ps \
+        "Get-NetIPConfiguration | Select-Object InterfaceAlias,IPv4Address,IPv4DefaultGateway,DNSServer | Format-List" \
+        "T1016" \
+        "Network interface configuration"
+
+    execute_ps \
+        "Get-NetAdapter | Select-Object Name,Status,MacAddress,LinkSpeed,InterfaceDescription | Format-Table -AutoSize" \
+        "T1016" \
+        "Network adapter enumeration"
+
+    execute_ps \
+        "Get-NetTCPConnection | Where-Object {\$_.State -eq 'Established'} | Select-Object LocalAddress,LocalPort,RemoteAddress,RemotePort,OwningProcess | Format-Table -AutoSize" \
         "T1049" \
-        "Enumerating established network connections"
-    
-    # List network adapters
-    execute_powershell \
-        "Get-NetAdapter | Select-Object Name,Status,MacAddress,LinkSpeed | Format-Table" \
-        "T1016" \
-        "Enumerating network adapters"
-    
-    # Get IP configuration for each adapter
-    execute_powershell \
-        "Get-NetIPConfiguration | Select-Object InterfaceAlias,IPv4Address,IPv6Address,DNSServer | Format-List" \
-        "T1016" \
-        "Getting IP configuration"
-    
-    # List SMB shares on the system
-    execute_powershell \
-        "Get-SmbShare | Select-Object Name,Path,Description | Format-Table" \
+        "Established TCP connections"
+
+    execute_ps \
+        "Get-NetTCPConnection | Where-Object {\$_.State -eq 'Listen'} | Select-Object LocalAddress,LocalPort,OwningProcess | Sort-Object LocalPort | Format-Table -AutoSize" \
+        "T1049" \
+        "Listening TCP ports (service exposure)"
+
+    execute_ps \
+        "Get-SmbShare -ErrorAction SilentlyContinue | Select-Object Name,Path,Description,CurrentUsers | Format-Table -AutoSize" \
         "T1135" \
-        "Enumerating SMB shares"
-    
-    # Display ARP cache (local network hosts)
-    execute_powershell \
-        "Get-NetNeighbor | Where-Object {\$_.State -ne 'Unreachable'} | Select-Object IPAddress,LinkLayerAddress,State | Format-Table" \
+        "Local SMB shares"
+
+    execute_ps \
+        "Get-SmbMapping -ErrorAction SilentlyContinue | Select-Object LocalPath,RemotePath,Status | Format-Table" \
+        "T1135" \
+        "Mapped network drives (lateral movement paths)"
+
+    execute_ps \
+        "Get-NetNeighbor | Where-Object {\$_.State -ne 'Unreachable'} | Select-Object IPAddress,LinkLayerAddress,State,InterfaceAlias | Format-Table -AutoSize" \
         "T1018" \
-        "Displaying ARP cache"
-    
-    # Display DNS cache (recently resolved hostnames)
-    execute_powershell \
-        "Get-DnsClientCache | Select-Object -First 20 Entry,RecordName,Status | Format-Table" \
+        "ARP neighbor table (local network hosts)"
+
+    execute_ps \
+        "Get-DnsClientCache -ErrorAction SilentlyContinue | Select-Object -First 25 Entry,RecordName,Data | Format-Table -AutoSize" \
+        "T1018" \
+        "DNS client cache (recently resolved hosts)"
+
+    execute_ps \
+        "Get-NetRoute | Where-Object {\$_.DestinationPrefix -ne '0.0.0.0/0' -and \$_.DestinationPrefix -notlike 'ff*' -and \$_.DestinationPrefix -notlike 'fe*'} | Select-Object -First 15 DestinationPrefix,NextHop,InterfaceAlias,RouteMetric | Format-Table" \
         "T1016" \
-        "Displaying DNS client cache"
+        "Routing table (network segmentation map)"
+
+    execute_ps \
+        "try { nltest /domain_trusts 2>\$null } catch { Write-Output 'Domain trust enumeration not available' }" \
+        "T1482" \
+        "Active Directory domain trusts"
+
+    execute_ps \
+        "Get-ItemProperty 'HKCU:\Software\Microsoft\Terminal Server Client\Servers\*' -ErrorAction SilentlyContinue | Select-Object PSChildName,UsernameHint | Format-Table" \
+        "T1018" \
+        "RDP connection history (previous lateral movement targets)"
+
+    execute_ps \
+        "netsh interface portproxy show all 2>\$null" \
+        "T1090" \
+        "Port proxy / forwarding rules"
+
+    end_phase
 }
 
 # ============================================================================
-# PHASE 8: AUTOMATED COLLECTION
-# Collect files that could be exfiltrated
+# PHASE 8: COLLECTION & STAGING
+# Gather high-value data, stage for exfiltration
 # ============================================================================
 
 phase_automated_collection() {
-    print_section "PHASE 8: Automated Collection" "T1119"
-    
+    begin_phase 8 "Collection & Staging" \
+        "T1119, T1005, T1074.001, T1114.001, T1113" \
+        "Collect high-value documents, emails, and stage for exfiltration review"
+
     ((TOTAL_ACTIONS++))
-    
-    # Create directory to store collected files
-    local collection_dir="/tmp/collected_data_$(date +%Y%m%d_%H%M%S)"
+    local collection_dir
+    collection_dir="/tmp/collected_data_$(date +%Y%m%d_%H%M%S)"
     mkdir -p "$collection_dir" 2>/dev/null
-    
+
     if [ ! -d "$collection_dir" ]; then
-        print_error "Failed to create collection directory" "T1119"
+        print_error "Failed to create collection directory" "T1074.001"
         return 1
     fi
-    
-    print_action "Collecting files to: $collection_dir"
-    
+
+    print_action "Staging directory: $collection_dir"
+
     local collected_count=0
-    local file_size_limit=10240  # Only collect files smaller than 10KB
-    
+    local file_size_limit=10240
+
     {
-        echo "  ┌─ Automated Collection"
-        echo "  │  Target Directory: $collection_dir"
-        echo "  │"
-        echo "  │  Collected Files:"
+        printf '    %s Collection & Staging\n' "$B_TL$B_H"
+        printf '    %s  Staging directory: %s\n' "$B_V" "$collection_dir"
+        printf '    %s  Size limit: %d bytes\n' "$B_V" "$file_size_limit"
+        printf '    %s\n' "$B_V"
     } >> "$LOG_FILE"
-    
-    # Copy small text files from Desktop
+
     for file in $(safe_find "$WINDOWS_SYSTEM/Users/*/Desktop" "*.txt" 5); do
         if [ -f "$file" ] && [ -r "$file" ]; then
-            local size=$(stat -c%s "$file" 2>/dev/null || echo 999999)
-            if [ "$size" -lt "$file_size_limit" ]; then
+            local fsize
+            fsize=$(stat -c%s "$file" 2>/dev/null || echo 999999)
+            if [ "$fsize" -lt "$file_size_limit" ]; then
                 cp "$file" "$collection_dir/" 2>/dev/null && {
-                    echo "  │    [COLLECTED] $file ($size bytes)" >> "$LOG_FILE"
+                    printf '    %s  [STAGED] %s (%s bytes)\n' "$B_V" "$file" "$fsize" >> "$LOG_FILE"
                     ((collected_count++))
                 }
             fi
         fi
     done
-    
+
     {
-        echo "  │"
-        echo "  │  Total collected: $collected_count files"
-        echo "  └─"
-        echo ""
+        printf '    %s\n' "$B_V"
+        printf '    %s  Total staged: %d files\n' "$B_V" "$collected_count"
+        printf '    %s\n' "$B_BL$B_H"
     } >> "$LOG_FILE"
-    
+
     if [ $collected_count -gt 0 ]; then
-        print_success "Collected $collected_count files" "T1119"
+        print_success "Staged $collected_count files for review" "T1074.001"
     else
-        print_error "No files collected (may indicate access restrictions)" "T1119"
+        print_info "No files staged (access restrictions or empty directories)"
         rmdir "$collection_dir" 2>/dev/null
+        ((FAILED_ACTIONS++))
     fi
+
+    # Email file discovery
+    execute_ps \
+        "Get-ChildItem -Path C:\Users -Recurse -Include *.pst,*.ost,*.eml,*.msg -ErrorAction SilentlyContinue | Select-Object -First 10 FullName,Length,LastWriteTime | Format-Table -AutoSize" \
+        "T1114.001" \
+        "Email archive files (.pst, .ost, .eml, .msg)"
+
+    # Clipboard content
+    execute_ps \
+        "try { Get-Clipboard -ErrorAction SilentlyContinue | Select-Object -First 5 } catch { Write-Output 'Clipboard not accessible' }" \
+        "T1115" \
+        "Current clipboard contents"
+
+    # Recent Office documents
+    execute_ps \
+        "Get-ChildItem 'C:\Users\*\AppData\Roaming\Microsoft\Office\Recent' -ErrorAction SilentlyContinue | Sort-Object LastWriteTime -Descending | Select-Object -First 15 Name,LastWriteTime | Format-Table" \
+        "T1005" \
+        "Recently opened Office documents"
+
+    # Downloads folder profiling
+    execute_ps \
+        "Get-ChildItem 'C:\Users\*\Downloads' -ErrorAction SilentlyContinue | Sort-Object LastWriteTime -Descending | Select-Object -First 15 Name,Length,LastWriteTime | Format-Table -AutoSize" \
+        "T1005" \
+        "Downloads folder contents (recent activity)"
+
+    end_phase
 }
 
 # ============================================================================
-# PHASE 9: PERSISTENCE RECONNAISSANCE
-# Identify common persistence mechanisms
+# PHASE 9: PERSISTENCE MECHANISM RECONNAISSANCE
+# Comprehensive persistence vector mapping
 # ============================================================================
 
 phase_persistence_recon() {
-    print_section "PHASE 9: Persistence Reconnaissance" "T1547, T1053"
-    
-    # Check user startup folders
-    execute_powershell \
-        "Get-ChildItem 'C:\Users\*\AppData\Roaming\Microsoft\Windows\Start Menu\Programs\Startup' -ErrorAction SilentlyContinue | Select-Object FullName,LastWriteTime" \
+    begin_phase 9 "Persistence Mechanism Reconnaissance" \
+        "T1547.001, T1053.005, T1543.003, T1546.003, T1574.001, T1546.015" \
+        "Map all persistence vectors: startup, tasks, services, WMI, COM, DLL hijack"
+
+    # Registry Run keys (comprehensive)
+    execute_ps \
+        "Write-Output '--- HKLM Run ---'; Get-ItemProperty -Path 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Run' -ErrorAction SilentlyContinue | Format-List; Write-Output '--- HKLM RunOnce ---'; Get-ItemProperty -Path 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\RunOnce' -ErrorAction SilentlyContinue | Format-List; Write-Output '--- HKCU Run ---'; Get-ItemProperty -Path 'HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Run' -ErrorAction SilentlyContinue | Format-List; Write-Output '--- HKCU RunOnce ---'; Get-ItemProperty -Path 'HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\RunOnce' -ErrorAction SilentlyContinue | Format-List" \
         "T1547.001" \
-        "Checking user startup folders"
-    
-    # List scheduled tasks
-    execute_powershell \
-        "Get-ScheduledTask | Where-Object {\$_.State -eq 'Ready'} | Select-Object TaskName,TaskPath,State | Format-Table -AutoSize" \
+        "Registry Run/RunOnce keys (all hives)"
+
+    # Startup folder
+    execute_ps \
+        "Get-ChildItem 'C:\Users\*\AppData\Roaming\Microsoft\Windows\Start Menu\Programs\Startup' -ErrorAction SilentlyContinue | Select-Object FullName,LastWriteTime | Format-Table; Get-ChildItem 'C:\ProgramData\Microsoft\Windows\Start Menu\Programs\Startup' -ErrorAction SilentlyContinue | Select-Object FullName,LastWriteTime | Format-Table" \
+        "T1547.001" \
+        "User and system startup folders"
+
+    # Scheduled tasks (detailed)
+    execute_ps \
+        "Get-ScheduledTask | Where-Object {\$_.State -eq 'Ready'} | ForEach-Object { [PSCustomObject]@{Name=\$_.TaskName; Path=\$_.TaskPath; State=\$_.State; Author=\$_.Author; Actions=(\$_.Actions | ForEach-Object { \$_.Execute }) -join ', '} } | Select-Object -First 25 | Format-Table -AutoSize -Wrap" \
         "T1053.005" \
-        "Enumerating scheduled tasks"
-    
-    # List services that auto-start
-    execute_powershell \
-        "Get-Service | Where-Object {\$_.StartType -eq 'Automatic' -and \$_.Status -eq 'Running'} | Select-Object -First 20 Name,DisplayName,StartType | Format-Table" \
+        "Active scheduled tasks with action details"
+
+    # Auto-start services with binary paths (writable service binaries = escalation)
+    execute_ps \
+        "Get-WmiObject Win32_Service | Where-Object {\$_.StartMode -eq 'Auto' -and \$_.State -eq 'Running'} | Select-Object -First 25 Name,DisplayName,PathName,StartMode | Format-Table -AutoSize -Wrap" \
         "T1543.003" \
-        "Enumerating auto-start services"
+        "Auto-start services with binary paths"
+
+    # Unquoted service paths (privilege escalation vector)
+    execute_ps \
+        'Get-WmiObject Win32_Service | Where-Object {$_.PathName -and $_.PathName -notmatch '"'"'^"'"'"' -and $_.PathName -match '"'"' '"'"'} | Select-Object Name,PathName,StartMode | Format-Table -AutoSize -Wrap' \
+        "T1574.009" \
+        "Unquoted service paths (privilege escalation)"
+
+    # WMI event subscriptions
+    execute_ps \
+        "Get-WmiObject -Namespace root\Subscription -Class __EventFilter -ErrorAction SilentlyContinue | Select-Object Name,Query | Format-Table; Get-WmiObject -Namespace root\Subscription -Class CommandLineEventConsumer -ErrorAction SilentlyContinue | Select-Object Name,CommandLineTemplate | Format-Table" \
+        "T1546.003" \
+        "WMI event subscriptions (stealthy persistence)"
+
+    # COM object hijacking opportunities
+    execute_ps \
+        'Get-ItemProperty "HKCU:\Software\Classes\CLSID\*\InProcServer32" -ErrorAction SilentlyContinue | Where-Object {$_."(default)" -ne $null} | Select-Object -First 10 PSPath,"(default)" | Format-Table' \
+        "T1546.015" \
+        "COM object registrations (hijack opportunities)"
+
+    # DLL search order hijack — writable directories in PATH
+    execute_ps \
+        "\$env:PATH -split ';' | ForEach-Object { if (\$_ -and (Test-Path \$_ -ErrorAction SilentlyContinue)) { \$acl = Get-Acl \$_ -ErrorAction SilentlyContinue; [PSCustomObject]@{Path=\$_; Owner=\$acl.Owner} } } | Format-Table -AutoSize" \
+        "T1574.001" \
+        "PATH directories and ownership (DLL hijack surface)"
+
+    # Boot Execute
+    execute_ps \
+        "Get-ItemProperty 'HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager' -ErrorAction SilentlyContinue | Select-Object BootExecute | Format-List" \
+        "T1547" \
+        "Boot execute programs"
+
+    end_phase
 }
 
 # ============================================================================
-# PHASE 10: RANSOMWARE-LIKE BEHAVIOR
-# Simulate ransomware reconnaissance without actually encrypting anything
+# PHASE 10: IMPACT SIMULATION (Ransomware / Destructive TTPs)
+# Reconnaissance only — no encryption, no deletion, no harm
 # ============================================================================
 
-phase_ransomware_behavior() {
-    print_section "PHASE 10: Ransomware-like Behavior ${C_YELLOW}(Simulation Only)${C_RESET}" "T1486, T1490, T1489"
-    
-    print_warning "Ransomware TTP demonstration - NO ACTUAL ENCRYPTION WILL OCCUR"
-    echo ""
-    
-    # Check for Volume Shadow Copies (ransomware typically deletes these)
-    print_action "T1490: Checking for shadow copies"
-    execute_powershell \
-        "Get-WmiObject Win32_ShadowCopy | Select-Object ID,VolumeName,InstallDate | Format-Table" \
+phase_impact_simulation() {
+    begin_phase 10 "Impact Simulation ${C_YELLOW}(Reconnaissance Only)${C_RESET}" \
+        "T1486, T1490, T1489, T1529, T1485" \
+        "Simulate ransomware recon: shadow copies, backups, critical services, recovery config"
+
+    print_warning "SIMULATION ONLY — no encryption, deletion, or service disruption"
+    printf '\n'
+
+    # Shadow copies
+    execute_ps \
+        "Get-WmiObject Win32_ShadowCopy -ErrorAction SilentlyContinue | Select-Object ID,VolumeName,InstallDate,DeviceObject | Format-Table -AutoSize" \
         "T1490" \
-        "Enumerating Volume Shadow Copies"
-    
-    # Check Windows backup status
-    execute_powershell \
-        "Get-WBSummary -ErrorAction SilentlyContinue | Select-Object LastSuccessfulBackupTime,LastBackupTime,NextBackupTime | Format-List" \
+        "Volume Shadow Copy enumeration"
+
+    # VSS service
+    execute_ps \
+        "Get-Service VSS -ErrorAction SilentlyContinue | Select-Object Name,DisplayName,Status,StartType | Format-List" \
         "T1490" \
-        "Checking Windows backup status"
-    
-    # Identify backup-related services that ransomware might stop
-    print_action "T1489: Identifying backup services"
-    execute_powershell \
-        "Get-Service | Where-Object {\$_.Name -match 'backup|vss|sql|exchange|vmware|veeam'} | Select-Object Name,DisplayName,Status,StartType | Format-Table" \
+        "Volume Shadow Copy Service status"
+
+    # Windows backup
+    execute_ps \
+        "Get-WBSummary -ErrorAction SilentlyContinue | Format-List; Get-WBPolicy -ErrorAction SilentlyContinue | Format-List" \
+        "T1490" \
+        "Windows Backup configuration and last run"
+
+    # Backup and recovery services
+    execute_ps \
+        "Get-Service | Where-Object {\$_.Name -match 'backup|vss|wbengine|sql|exchange|vmware|veeam|acronis|commvault|netbackup|arcserve'} | Select-Object Name,DisplayName,Status,StartType | Format-Table -AutoSize" \
         "T1489" \
-        "Enumerating backup-related services"
-    
-    # Enumerate files that ransomware typically targets
-    print_action "T1486: Enumerating potential encryption targets"
+        "Backup and business-critical services"
+
+    # Database services (high-value targets)
+    execute_ps \
+        "Get-Service | Where-Object {\$_.Name -match 'MSSQL|MySQL|postgres|oracle|mongodb|redis|elasticsearch|MariaDB'} | Select-Object Name,DisplayName,Status,StartType | Format-Table -AutoSize" \
+        "T1489" \
+        "Database service enumeration"
+
+    # Ransomware target file count
     ((TOTAL_ACTIONS++))
-    
+    print_action "Counting potential encryption targets..."
+
     {
-        echo "  ┌─ Ransomware Target Enumeration"
-        echo "  │  NOTE: File enumeration only - NO ENCRYPTION WILL BE PERFORMED"
-        echo "  │"
+        printf '    %s Ransomware Target Assessment\n' "$B_TL$B_H"
+        printf '    %s  NOTE: Enumeration only — NO encryption\n' "$B_V"
+        printf '    %s\n' "$B_V"
     } >> "$LOG_FILE"
-    
-    # File extensions commonly targeted by ransomware
-    local target_extensions=("*.docx" "*.xlsx" "*.pdf" "*.jpg" "*.png" "*.pptx" "*.zip")
+
+    local target_extensions=("*.docx" "*.xlsx" "*.pdf" "*.jpg" "*.png" "*.pptx" "*.zip" "*.mdb" "*.accdb" "*.pst" "*.bak" "*.sql")
     local target_count=0
-    
+
     for ext in "${target_extensions[@]}"; do
-        for location in "$WINDOWS_SYSTEM/Users/*/Documents" "$WINDOWS_SYSTEM/Users/*/Desktop"; do
-            if [ -d "$location" ]; then
+        for location in "$WINDOWS_SYSTEM/Users/*/Documents" "$WINDOWS_SYSTEM/Users/*/Desktop" "$WINDOWS_SYSTEM/Users/*/Downloads"; do
+            if [ -d "$location" ] 2>/dev/null; then
                 while IFS= read -r file; do
-                    echo "  │  [TARGET] $file" >> "$LOG_FILE"
+                    printf '    %s  [TARGET] %s\n' "$B_V" "$file" >> "$LOG_FILE"
                     ((target_count++))
                 done < <(safe_find "$location" "$ext" 10)
             fi
         done
     done
-    
+
     {
-        echo "  │"
-        echo "  │  Total targets identified: $target_count"
-        echo "  └─"
-        echo ""
+        printf '    %s\n' "$B_V"
+        printf '    %s  Potential targets: %d files\n' "$B_V" "$target_count"
+        printf '    %s\n' "$B_BL$B_H"
     } >> "$LOG_FILE"
-    
+
     if [ $target_count -gt 0 ]; then
-        print_success "Identified $target_count potential targets" "T1486"
+        print_success "Identified $target_count potential encryption targets" "T1486"
+        print_finding "INFO" "$target_count files would be impacted in real ransomware scenario"
     else
-        print_error "No target files identified" "T1486"
+        print_info "No target files found"
+        ((FAILED_ACTIONS++))
     fi
-    
-    # Create a ransom note as an indicator (clearly marked as simulation)
-    print_action "T1486: Creating ransom note indicator"
+
+    # Ransom note indicator
+    print_action "Creating simulation ransom note indicator..."
     ((TOTAL_ACTIONS++))
-    
+
     local ransom_note="/tmp/RANSOMWARE_NOTE_PURPLETEAM.txt"
     cat > "$ransom_note" <<'RANSOMNOTE'
 ╔══════════════════════════════════════════════════════════════╗
-║          PURPLE TEAM EXERCISE INDICATOR                      ║
-║             RANSOMWARE NOTE SIMULATION                       ║
+║              PURPLE TEAM EXERCISE INDICATOR                  ║
+║               RANSOMWARE NOTE SIMULATION                     ║
 ╚══════════════════════════════════════════════════════════════╝
 
-⚠ THIS IS A SIMULATED RANSOMWARE NOTE FOR TRAINING ⚠
+  THIS IS A SIMULATED RANSOM NOTE FOR PURPLE TEAM TRAINING.
+  NO FILES HAVE BEEN ENCRYPTED. NO DATA WAS HARMED.
 
-NO FILES HAVE BEEN ENCRYPTED.
-NO DATA HAS BEEN HARMED.
-THIS IS A PURPLE TEAM SECURITY EXERCISE.
+  In a real attack, this note would contain:
+    - Ransom amount and cryptocurrency wallet
+    - Deadline and escalation threats
+    - Data leak threats (double extortion)
+    - "Support" contact channels
 
-In a real ransomware attack, this note would contain:
-  • Information about encrypted files
-  • Payment instructions (Bitcoin address)
-  • Threats and deadlines
-  • Contact information for "support"
+  Blue Team Detection Opportunities:
+    - File creation in unusual locations
+    - Suspicious naming pattern (RANSOMWARE_NOTE_*)
+    - WSL process spawning PowerShell
+    - Rapid file enumeration across directories
+    - Shadow copy / backup service queries
+    - Service stop attempts
 
-Blue Team Detection Opportunities:
-  ✓ File creation in unusual locations
-  ✓ Suspicious file naming patterns
-  ✓ Text file creation across multiple directories
-  ✓ Unusual process behavior (WSL spawning PowerShell)
-
-MITRE ATT&CK Technique: T1486 (Data Encrypted for Impact)
-Purple Team Exercise Timestamp: $(date '+%Y-%m-%d %H:%M:%S')
-
-For questions about this exercise, contact your security team.
+  MITRE ATT&CK: T1486 (Data Encrypted for Impact)
 RANSOMNOTE
-    
+
     if [ -f "$ransom_note" ]; then
-        print_success "Ransom note indicator created at $ransom_note" "T1486"
-        {
-            echo "  ┌─ Ransom Note Created"
-            echo "  │  Location: $ransom_note"
-            echo "  │"
-            echo "  │  Content:"
-            sed 's/^/  │    /' "$ransom_note"
-            echo "  └─"
-            echo ""
-        } >> "$LOG_FILE"
+        print_success "Ransom note indicator created: $ransom_note" "T1486"
     else
         print_error "Failed to create ransom note indicator" "T1486"
     fi
-    
-    # Check event log configuration (ransomware often clears logs)
-    execute_powershell \
-        "Get-EventLog -List | Select-Object Log,MaximumKilobytes,OverflowAction | Format-Table" \
+
+    # Event log clearing capability check (not actually clearing)
+    execute_ps \
+        "Get-WinEvent -ListLog Security,System,Application -ErrorAction SilentlyContinue | Select-Object LogName,RecordCount,MaximumSizeInBytes | Format-Table" \
+        "T1070.001" \
+        "Event log sizes (clearing impact assessment)"
+
+    # System recovery configuration
+    execute_ps \
+        "bcdedit /enum 2>\$null | Select-Object -First 20; Get-ItemProperty 'HKLM:\SYSTEM\CurrentControlSet\Control\SafeBoot' -ErrorAction SilentlyContinue | Format-List" \
         "T1490" \
-        "Checking event log configuration"
-    
-    # Identify database services (ransomware targets these)
-    execute_powershell \
-        "Get-Service | Where-Object {\$_.Name -match 'mssql|mysql|postgres|oracle|mongodb'} | Select-Object Name,DisplayName,Status | Format-Table" \
-        "T1489" \
-        "Enumerating database services"
-    
-    # Check for mapped network drives (ransomware spreads to these)
-    execute_powershell \
-        "Get-SmbMapping -ErrorAction SilentlyContinue | Select-Object LocalPath,RemotePath,Status | Format-Table" \
-        "T1135" \
-        "Enumerating mapped network drives"
-    
-    # Check Volume Shadow Copy Service status
-    execute_powershell \
-        "Get-Service VSS | Select-Object Name,DisplayName,Status,StartType | Format-List" \
-        "T1490" \
-        "Checking Volume Shadow Copy Service status"
-    
-    print_warning "Ransomware TTP demonstration complete - no files were harmed"
+        "Boot configuration and recovery options"
+
+    # Mapped drives (ransomware lateral spread)
+    execute_ps \
+        "Get-PSDrive -PSProvider FileSystem | Where-Object {\$_.Root -match '\\\\\\\\' } | Select-Object Name,Root,Used,Free | Format-Table" \
+        "T1486" \
+        "Network drives (lateral encryption targets)"
+
+    print_warning "Impact simulation complete — no files were harmed, no services disrupted"
+
+    end_phase
 }
 
 # ============================================================================
-# PHASE 11: EICAR AV DETECTION TEST
-# Test antivirus detection using the safe EICAR test file
+# HELP AND USAGE
 # ============================================================================
 
-phase_eicar_test() {
-    print_section "PHASE 11: EICAR AV Detection Test" "AV-TEST"
-    
-    print_warning "Testing AV detection with EICAR (a safe, standard test file)"
-    echo ""
-    
-    # EICAR is a standard test string recognized by all antivirus software
-    # It is NOT malware - it's specifically designed for AV testing
-    local eicar='X5O!P%@AP[4\PZX54(P^)7CC)7}$EICAR-STANDARD-ANTIVIRUS-TEST-FILE!$H+H*'
-    
-    {
-        echo "  ┌─ EICAR AV Detection Test"
-        echo "  │  NOTE: EICAR is a SAFE, industry-standard test file"
-        echo "  │"
-    } >> "$LOG_FILE"
-    
-    # Test 1: Create EICAR file in WSL filesystem
-    ((TOTAL_ACTIONS++))
-    print_action "Creating EICAR test file in WSL filesystem..."
-    
-    local eicar_tmp="/tmp/eicar_test_$(date +%Y%m%d_%H%M%S).com"
-    
-    if echo "$eicar" > "$eicar_tmp" 2>/dev/null; then
-        if [ -f "$eicar_tmp" ]; then
-            print_success "EICAR created in WSL: $eicar_tmp" "AV-TEST"
-            echo "  │  [WSL] Created: $eicar_tmp" >> "$LOG_FILE"
-            
-            # Wait and check if AV deleted it
-            sleep 2
-            if [ -f "$eicar_tmp" ]; then
-                print_warning "EICAR still exists - AV may not be monitoring WSL filesystem"
-                echo "  │  [WSL] File persists - possible AV coverage gap" >> "$LOG_FILE"
-            else
-                print_success "EICAR was deleted - AV is monitoring WSL filesystem" "AV-TEST"
-                echo "  │  [WSL] File deleted by AV" >> "$LOG_FILE"
-            fi
-        fi
-    else
-        print_success "EICAR blocked in WSL - AV is active" "AV-TEST"
-        echo "  │  [WSL] Blocked immediately" >> "$LOG_FILE"
-    fi
-    
-    # Test 2: Create EICAR file on Windows filesystem
-    ((TOTAL_ACTIONS++))
-    print_action "Creating EICAR test file on Windows filesystem..."
-    
-    local eicar_win="$WINDOWS_SYSTEM/Users/Public/Documents/eicar_test.com"
-    
-    if echo "$eicar" > "$eicar_win" 2>/dev/null; then
-        sleep 1
-        if [ -f "$eicar_win" ]; then
-            print_warning "EICAR exists on Windows filesystem - AV may be inactive" "AV-TEST"
-            echo "  │  [WINDOWS] File persists - AV may be disabled" >> "$LOG_FILE"
-            rm -f "$eicar_win" 2>/dev/null
-        else
-            print_success "EICAR was deleted from Windows - AV is active" "AV-TEST"
-            echo "  │  [WINDOWS] File deleted by AV" >> "$LOG_FILE"
-        fi
-    else
-        print_success "EICAR blocked on Windows filesystem - AV is active" "AV-TEST"
-        echo "  │  [WINDOWS] Blocked immediately" >> "$LOG_FILE"
-    fi
-    
-    # Test 3: Try EICAR with different file extensions
-    print_action "Testing EICAR detection with various file extensions..."
-    ((TOTAL_ACTIONS++))
-    
-    local extensions=("txt" "exe" "com" "bat" "ps1")
-    local detected=0
-    local missed=0
-    
-    for ext in "${extensions[@]}"; do
-        local test_file="/tmp/eicar_test.$ext"
-        echo "$eicar" > "$test_file" 2>/dev/null
-        sleep 1
-        
-        if [ -f "$test_file" ]; then
-            echo "  │  [.$ext] Not detected/deleted" >> "$LOG_FILE"
-            ((missed++))
-            rm -f "$test_file" 2>/dev/null
-        else
-            echo "  │  [.$ext] Detected and removed" >> "$LOG_FILE"
-            ((detected++))
-        fi
+show_help() {
+    printf '%b' "$C_CYAN"
+    cat << "EOF"
+╔══════════════════════════════════════════════════════════════════════════╗
+║                     PURPLE TEAM AGENT v4.0                               ║
+║          Advanced Adversary Simulation — Financial / Gov Sector          ║
+╚══════════════════════════════════════════════════════════════════════════╝
+EOF
+    printf '%b' "$C_RESET"
+    printf '\n'
+    printf '%b%s%b\n' "$C_WHITE" "USAGE:" "$C_RESET"
+    printf '    %s [OPTIONS]\n' "$0"
+    printf '\n'
+    printf '%b%s%b\n' "$C_WHITE" "OPTIONS:" "$C_RESET"
+    printf '    %b-h, --help%b              Show this help message\n' "$C_GREEN" "$C_RESET"
+    printf '    %b-a, --all%b               Run all phases (default)\n' "$C_GREEN" "$C_RESET"
+    printf '    %b-p, --phase <N[,N]>%b     Run specific phase(s) (1-10)\n' "$C_GREEN" "$C_RESET"
+    printf '    %b-l, --list%b              List available phases\n' "$C_GREEN" "$C_RESET"
+    printf '    %b-q, --quiet%b             Minimal terminal output\n' "$C_GREEN" "$C_RESET"
+    printf '    %b-v, --verbose%b           Verbose / debug output\n' "$C_GREEN" "$C_RESET"
+    printf '\n'
+    printf '%b%s%b\n' "$C_WHITE" "PHASES:" "$C_RESET"
+    printf '    %bPhase  1%b — System & Environment Profiling     (T1082, T1497, T1614)\n' "$C_CYAN" "$C_RESET"
+    printf '    %bPhase  2%b — Account & Privilege Discovery      (T1087, T1069, T1201)\n' "$C_CYAN" "$C_RESET"
+    printf '    %bPhase  3%b — Process & Service Intelligence     (T1057, T1007, T1518)\n' "$C_CYAN" "$C_RESET"
+    printf '    %bPhase  4%b — Sensitive File Discovery           (T1083, T1005, T1552)\n' "$C_CYAN" "$C_RESET"
+    printf '    %bPhase  5%b — Credential Access Reconnaissance   (T1555, T1003, T1552)\n' "$C_CYAN" "$C_RESET"
+    printf '    %bPhase  6%b — Defense Evasion Reconnaissance     (T1562, T1218, T1027)\n' "$C_CYAN" "$C_RESET"
+    printf '    %bPhase  7%b — Network & Lateral Movement Recon   (T1049, T1018, T1482)\n' "$C_CYAN" "$C_RESET"
+    printf '    %bPhase  8%b — Collection & Staging               (T1119, T1074, T1114)\n' "$C_CYAN" "$C_RESET"
+    printf '    %bPhase  9%b — Persistence Mechanism Recon        (T1547, T1053, T1546)\n' "$C_CYAN" "$C_RESET"
+    printf '    %bPhase 10%b — Impact Simulation (No Harm)        (T1486, T1490, T1489)\n' "$C_MAGENTA" "$C_RESET"
+    printf '\n'
+    printf '%b%s%b\n' "$C_WHITE" "EXAMPLES:" "$C_RESET"
+    printf '    %s --all                 # Run all phases\n' "$0"
+    printf '    %s --phase 1             # System profiling only\n' "$0"
+    printf '    %s --phase 5,6,7         # Credentials, defenses, network\n' "$0"
+    printf '    %s --list                # Show phase details\n' "$0"
+    printf '\n'
+    printf '%b%s%b\n' "$C_WHITE" "OUTPUT:" "$C_RESET"
+    printf '    Terminal:   Colour-coded with findings severity\n'
+    printf '    Text Log:   /tmp/purpleteam_<timestamp>.log\n'
+    printf '    JSON Log:   /tmp/purpleteam_<timestamp>.json\n'
+    printf '\n'
+    printf '%b%s%b\n' "$C_YELLOW" "  FOR AUTHORIZED PURPLE TEAM EXERCISES ONLY" "$C_RESET"
+    printf '\n'
+}
+
+list_phases() {
+    printf '%b' "$C_CYAN"
+    cat << "EOF"
+╔══════════════════════════════════════════════════════════════════════════╗
+║                        AVAILABLE PHASES                                  ║
+╚══════════════════════════════════════════════════════════════════════════╝
+EOF
+    printf '%b\n' "$C_RESET"
+
+    local phases=(
+        "1|System & Environment Profiling|T1082, T1497.001, T1614, T1614.001|Fingerprint OS, hardware, VM detection, security stack, locale|~20s"
+        "2|Account & Privilege Discovery|T1087, T1069, T1201, T1033|Local/domain users, groups, password policy, admin enum|~25s"
+        "3|Process & Service Intelligence|T1057, T1007, T1518.001, T1497.001|Running processes, security tools, financial apps, analysis tools|~20s"
+        "4|Sensitive File Discovery|T1083, T1005, T1552.001, T1552.004|Documents, certs, keys, configs, password DBs, RDP files|~30s"
+        "5|Credential Access Reconnaissance|T1552, T1555, T1003, T1552.006|Browser creds, Credential Manager, LSASS, SAM, cloud tokens|~35s"
+        "6|Defense Evasion Reconnaissance|T1562, T1218, T1027|PS logging, Sysmon, firewall, AppLocker, AMSI, audit policy|~25s"
+        "7|Network & Lateral Movement Recon|T1049, T1018, T1135, T1482, T1016|Connections, shares, routing, domain trusts, RDP history|~30s"
+        "8|Collection & Staging|T1119, T1074.001, T1114.001, T1005|Stage documents, email archives, clipboard, recent files|~25s"
+        "9|Persistence Mechanism Recon|T1547, T1053, T1543, T1546, T1574|Run keys, tasks, services, WMI, COM hijack, DLL search order|~25s"
+        "10|Impact Simulation (No Harm)|T1486, T1490, T1489, T1529|Shadow copies, backups, DB services, target enumeration|~30s"
+    )
+
+    for entry in "${phases[@]}"; do
+        IFS='|' read -r num title techniques desc duration <<< "$entry"
+        local color="$C_GREEN"
+        [ "$num" = "10" ] && color="$C_MAGENTA"
+        printf '  %b[%2s]%b  %b%s%b\n' "$C_WHITE" "$num" "$C_RESET" "$color" "$title" "$C_RESET"
+        printf '       MITRE ATT&CK: %s\n' "$techniques"
+        printf '       %s\n' "$desc"
+        printf '       Duration: %s\n\n' "$duration"
     done
-    
-    {
-        echo "  │"
-        echo "  │  Detection Summary:"
-        echo "  │    Detected: $detected/${#extensions[@]}"
-        echo "  │    Missed: $missed/${#extensions[@]}"
-        echo "  └─"
-        echo ""
-    } >> "$LOG_FILE"
-    
-    if [ $detected -eq ${#extensions[@]} ]; then
-        print_success "AV detected all EICAR test file variations" "AV-TEST"
-    elif [ $detected -gt 0 ]; then
-        print_warning "AV detected $detected/${#extensions[@]} EICAR variations - some gaps exist" "AV-TEST"
-    else
-        print_error "AV did not detect any EICAR files - AV may not be active" "AV-TEST"
-    fi
-    
-    # Verify Windows Defender configuration
-    print_action "Verifying Windows Defender configuration..."
-    
-    execute_powershell \
-        "Get-MpComputerStatus | Select-Object AntivirusEnabled,AMServiceEnabled,RealTimeProtectionEnabled,IoavProtectionEnabled | Format-List" \
-        "AV-TEST" \
-        "Checking Windows Defender status"
-    
-    execute_powershell \
-        "Get-MpPreference | Select-Object DisableRealtimeMonitoring,DisableBehaviorMonitoring,DisableBlockAtFirstSeen | Format-List" \
-        "AV-TEST" \
-        "Checking Windows Defender preferences"
+
+    printf '  %bTotal estimated time for all phases: ~5-6 minutes%b\n\n' "$C_GRAY" "$C_RESET"
 }
 
 # ============================================================================
-# BANNER AND INITIALIZATION
-# Display script information and initialize log files
+# BANNER
 # ============================================================================
 
 show_banner() {
     clear
-    echo -e "${C_CYAN}"
+    printf '%b' "$C_CYAN"
     cat << "EOF"
     ╔═══════════════════════════════════════════════════════════════════╗
     ║                                                                   ║
@@ -1138,148 +1338,127 @@ show_banner() {
     ║      ██║   ███████╗██║  ██║██║ ╚═╝ ██║                           ║
     ║      ╚═╝   ╚══════╝╚═╝  ╚═╝╚═╝     ╚═╝                           ║
     ║                                                                   ║
-    ║               Red Team Simulation Framework                      ║
+    ║            Advanced Adversary Simulation Framework                ║
     ║                    WSL → Windows Host                            ║
+    ║             Financial / Government Sector TTPs                   ║
     ║                                                                   ║
     ╚═══════════════════════════════════════════════════════════════════╝
 EOF
-    echo -e "${C_RESET}"
-    echo -e "${C_WHITE}    Version: ${C_CYAN}${SCRIPT_VERSION}${C_RESET}"
-    echo -e "${C_WHITE}    Target:  ${C_CYAN}Windows Host via WSL${C_RESET}"
-    echo -e "${C_WHITE}    Purpose: ${C_CYAN}Authorized Purple Team Exercise${C_RESET}"
-    echo ""
-    echo -e "${C_YELLOW}    ⚠  FOR AUTHORIZED SECURITY TESTING ONLY  ⚠${C_RESET}"
-    echo ""
-    
-    # Initialize log files with header information
-    {
-        echo "╔═══════════════════════════════════════════════════════════════════╗"
-        echo "║           PURPLE TEAM AGENT EXECUTION LOG                        ║"
-        echo "╚═══════════════════════════════════════════════════════════════════╝"
-        echo ""
-        echo "Execution Details:"
-        echo "  Script Version: $SCRIPT_VERSION"
-        echo "  Start Time: $(date '+%Y-%m-%d %H:%M:%S %Z')"
-        echo "  Log File: $LOG_FILE"
-        echo "  JSON Log: $JSON_LOG"
-        echo "  Operator: $(whoami)"
-        echo "  Hostname: $(hostname)"
-        echo ""
-        echo "═══════════════════════════════════════════════════════════════════"
-        echo ""
-    } > "$LOG_FILE"
-    
-    # Initialize JSON log array
-    echo "[" > "$JSON_LOG"
+    printf '%b' "$C_RESET"
+    printf '    %bVersion:%b  %b%s%b\n' "$C_WHITE" "$C_RESET" "$C_CYAN" "$SCRIPT_VERSION" "$C_RESET"
+    printf '    %bTarget:%b   %bWindows Host via WSL%b\n' "$C_WHITE" "$C_RESET" "$C_CYAN" "$C_RESET"
+    printf '    %bFocus:%b    %bFinancial & Government Sector APT TTPs%b\n' "$C_WHITE" "$C_RESET" "$C_CYAN" "$C_RESET"
+    printf '    %bPurpose:%b  %bAuthorized Purple Team Exercise%b\n' "$C_WHITE" "$C_RESET" "$C_CYAN" "$C_RESET"
+    printf '\n'
+    printf '    %b⚠  FOR AUTHORIZED SECURITY TESTING ONLY  ⚠%b\n\n' "$C_YELLOW" "$C_RESET"
+
+    init_logs
 }
 
 # ============================================================================
-# SUMMARY AND CLEANUP
-# Display execution summary and finalize logs
+# SUMMARY
 # ============================================================================
 
 generate_summary() {
-    local end_time=$(date +%s)
-    local duration=$((end_time - START_TIME))
-    local minutes=$((duration / 60))
-    local seconds=$((duration % 60))
-    
-    # Display summary to terminal
-    echo ""
-    echo -e "${C_CYAN}╔═══════════════════════════════════════════════════════════════════╗${C_RESET}"
-    echo -e "${C_CYAN}║${C_RESET}                    ${C_WHITE}EXECUTION SUMMARY${C_RESET}                              ${C_CYAN}║${C_RESET}"
-    echo -e "${C_CYAN}╚═══════════════════════════════════════════════════════════════════╝${C_RESET}"
-    echo ""
-    echo -e "  ${C_WHITE}Duration:${C_RESET}       ${minutes}m ${seconds}s"
-    echo -e "  ${C_WHITE}Total Actions:${C_RESET}  $TOTAL_ACTIONS"
-    echo -e "  ${C_GREEN}Successful:${C_RESET}     $SUCCESSFUL_ACTIONS"
-    echo -e "  ${C_RED}Failed:${C_RESET}         $FAILED_ACTIONS"
-    
+    local end_time duration minutes seconds
+    end_time=$(date +%s)
+    duration=$((end_time - START_TIME))
+    minutes=$((duration / 60))
+    seconds=$((duration % 60))
+
+    printf '\n'
+    printf '%b╔═══════════════════════════════════════════════════════════════════════╗%b\n' "$C_CYAN" "$C_RESET"
+    printf '%b║%b                       %bEXECUTION SUMMARY%b                              %b║%b\n' "$C_CYAN" "$C_RESET" "$C_WHITE" "$C_RESET" "$C_CYAN" "$C_RESET"
+    printf '%b╚═══════════════════════════════════════════════════════════════════════╝%b\n' "$C_CYAN" "$C_RESET"
+    printf '\n'
+    printf '  %-20s %dm %ds\n' "Duration:" "$minutes" "$seconds"
+    printf '  %-20s %d\n' "Total Actions:" "$TOTAL_ACTIONS"
+    printf '  %b%-20s%b %d\n' "$C_GREEN" "Successful:" "$C_RESET" "$SUCCESSFUL_ACTIONS"
+    printf '  %b%-20s%b %d\n' "$C_RED" "Failed:" "$C_RESET" "$FAILED_ACTIONS"
+    printf '  %b%-20s%b %d\n' "$C_YELLOW" "Skipped:" "$C_RESET" "$SKIPPED_ACTIONS"
+
     if [ $TOTAL_ACTIONS -gt 0 ]; then
-        local success_rate=$(awk "BEGIN {printf \"%.1f\", ($SUCCESSFUL_ACTIONS/$TOTAL_ACTIONS)*100}")
-        echo -e "  ${C_CYAN}Success Rate:${C_RESET}   ${success_rate}%"
+        local success_rate
+        success_rate=$(awk "BEGIN {printf \"%.1f\", ($SUCCESSFUL_ACTIONS/$TOTAL_ACTIONS)*100}")
+        printf '  %-20s %s%%\n' "Success Rate:" "$success_rate"
     fi
-    
-    echo ""
-    echo -e "${C_YELLOW}📋 Output Files:${C_RESET}"
-    echo -e "  ${C_WHITE}Professional Log:${C_RESET} $LOG_FILE"
-    echo -e "  ${C_WHITE}JSON Log:${C_RESET}         $JSON_LOG"
-    
+
+    printf '\n'
+    printf '  %b── Output Files ──%b\n' "$C_WHITE" "$C_RESET"
+    printf '  Text Log:    %s\n' "$LOG_FILE"
+    printf '  JSON Log:    %s\n' "$JSON_LOG"
+
     if [ -f "/tmp/RANSOMWARE_NOTE_PURPLETEAM.txt" ]; then
-        echo -e "  ${C_WHITE}Ransom Note:${C_RESET}      /tmp/RANSOMWARE_NOTE_PURPLETEAM.txt"
+        printf '  Ransom Note: /tmp/RANSOMWARE_NOTE_PURPLETEAM.txt\n'
     fi
-    
-    if ls -d /tmp/collected_data_* &>/dev/null; then
-        echo -e "  ${C_WHITE}Collected Data:${C_RESET}   $(ls -d /tmp/collected_data_* 2>/dev/null | tail -1)"
+    if ls -d /tmp/collected_data_* &>/dev/null 2>&1; then
+        printf '  Staged Data: %s\n' "$(ls -d /tmp/collected_data_* 2>/dev/null | tail -1)"
     fi
-    
-    echo ""
-    echo -e "${C_CYAN}🔍 Blue Team Detection Hints:${C_RESET}"
-    echo ""
-    echo -e "${C_WHITE}  Standard Indicators:${C_RESET}"
-    echo "    • PowerShell EventID 4104 (Script Block Logging)"
-    echo "    • Process Creation EventID 4688 (WSL → PowerShell)"
-    echo "    • File Access EventID 4663"
-    echo "    • Registry Access EventID 4657"
-    echo "    • Network Connection EventID 5156"
-    echo ""
-    echo -e "${C_WHITE}  Ransomware-Specific:${C_RESET}"
-    echo "    • Volume Shadow Copy enumeration/deletion"
-    echo "    • Mass file enumeration patterns"
-    echo "    • Ransom note creation (.txt files)"
-    echo "    • Service stop attempts (backup/database services)"
-    echo "    • Event log tampering attempts"
-    echo ""
-    
-    # Write summary to log file
+
+    printf '\n'
+    printf '  %b── Blue Team Detection Hints ──%b\n' "$C_WHITE" "$C_RESET"
+    printf '\n'
+    printf '  %bStandard Indicators:%b\n' "$C_WHITE" "$C_RESET"
+    printf '    • PowerShell EventID 4104 (Script Block Logging)\n'
+    printf '    • Process Creation EventID 4688 (WSL → PowerShell)\n'
+    printf '    • File Access EventID 4663\n'
+    printf '    • Registry Access EventID 4657\n'
+    printf '    • Network Connection EventID 5156\n'
+    printf '    • Logon EventID 4624/4625\n'
+    printf '\n'
+    printf '  %bAPT / Financial Sector Indicators:%b\n' "$C_WHITE" "$C_RESET"
+    printf '    • LDAP queries for adminCount=1 (admin enumeration)\n'
+    printf '    • Shadow copy enumeration (pre-ransomware)\n'
+    printf '    • Credential store access attempts (browser DBs)\n'
+    printf '    • Lateral movement recon (RDP history, SMB shares)\n'
+    printf '    • WMI subscription queries (stealthy persistence)\n'
+    printf '    • Service binary path enumeration (escalation)\n'
+    printf '\n'
+
     {
-        echo ""
-        echo "═══════════════════════════════════════════════════════════════════"
-        echo "EXECUTION SUMMARY"
-        echo "═══════════════════════════════════════════════════════════════════"
-        echo ""
-        echo "Completion Time: $(date '+%Y-%m-%d %H:%M:%S %Z')"
-        echo "Total Duration: ${minutes}m ${seconds}s"
-        echo ""
-        echo "Statistics:"
-        echo "  Total Actions:    $TOTAL_ACTIONS"
-        echo "  Successful:       $SUCCESSFUL_ACTIONS"
-        echo "  Failed:           $FAILED_ACTIONS"
+        printf '\n'
+        printf '  ══════════════════════════════════════════════════════════════════\n'
+        printf '  EXECUTION SUMMARY\n'
+        printf '  ══════════════════════════════════════════════════════════════════\n'
+        printf '\n'
+        printf '  Completed:    %s\n' "$(date '+%Y-%m-%d %H:%M:%S %Z')"
+        printf '  Duration:     %dm %ds\n' "$minutes" "$seconds"
+        printf '  Actions:      %d total | %d success | %d failed | %d skipped\n' \
+            "$TOTAL_ACTIONS" "$SUCCESSFUL_ACTIONS" "$FAILED_ACTIONS" "$SKIPPED_ACTIONS"
         if [ $TOTAL_ACTIONS -gt 0 ]; then
-            echo "  Success Rate:     $(awk "BEGIN {printf \"%.1f\", ($SUCCESSFUL_ACTIONS/$TOTAL_ACTIONS)*100}")%"
+            printf '  Success Rate: %s%%\n' "$(awk "BEGIN {printf \"%.1f\", ($SUCCESSFUL_ACTIONS/$TOTAL_ACTIONS)*100}")"
         fi
-        echo ""
-        echo "Environment:"
-        echo "  WSL Version:      $WSL_VERSION"
-        echo "  PowerShell:       $POWERSHELL_CMD"
-        echo "  Windows Mount:    $WINDOWS_SYSTEM"
-        echo ""
-        echo "Output Files:"
-        echo "  Text Log:         $LOG_FILE"
-        echo "  JSON Log:         $JSON_LOG"
-        echo ""
-        echo "═══════════════════════════════════════════════════════════════════"
-        echo ""
+        printf '\n'
+        printf '  Environment:\n'
+        printf '    WSL Version:   %s\n' "$WSL_VERSION"
+        printf '    PowerShell:    %s\n' "$POWERSHELL_CMD"
+        printf '    Windows Mount: %s\n' "$WINDOWS_SYSTEM"
+        printf '    Target Host:   %s\n' "${HOSTNAME_DETECTED:-unknown}"
+        printf '    Target User:   %s\n' "${USERNAME_DETECTED:-unknown}"
+        printf '\n'
+        printf '  Output Files:\n'
+        printf '    Text Log: %s\n' "$LOG_FILE"
+        printf '    JSON Log: %s\n' "$JSON_LOG"
+        printf '\n'
+        printf '  ══════════════════════════════════════════════════════════════════\n'
     } >> "$LOG_FILE"
-    
-    # Finalize JSON log with summary
-    echo '{"summary": {"duration": '$duration', "total": '$TOTAL_ACTIONS', "successful": '$SUCCESSFUL_ACTIONS', "failed": '$FAILED_ACTIONS'}}]' >> "$JSON_LOG"
-    
-    echo -e "${C_GREEN}${SYM_SUCCESS} Purple Team exercise completed successfully${C_RESET}"
-    echo ""
+
+    # Finalize JSON
+    printf '  {"summary":{"version":"%s","duration":%d,"total":%d,"successful":%d,"failed":%d,"skipped":%d}}\n]\n' \
+        "$SCRIPT_VERSION" "$duration" "$TOTAL_ACTIONS" "$SUCCESSFUL_ACTIONS" "$FAILED_ACTIONS" "$SKIPPED_ACTIONS" >> "$JSON_LOG"
+
+    printf '%b✓ Purple Team exercise completed%b\n\n' "$C_GREEN" "$C_RESET"
 }
 
 # ============================================================================
-# MAIN EXECUTION LOGIC
-# Parse command line arguments and execute requested phases
+# MAIN
 # ============================================================================
 
 main() {
     local run_all=true
     local phases_to_run=()
     local quiet_mode=false
-    
-    # Parse command line arguments
+
     while [[ $# -gt 0 ]]; do
         case $1 in
             -h|--help)
@@ -1308,83 +1487,66 @@ main() {
                 shift
                 ;;
             *)
-                echo -e "${C_RED}Unknown option: $1${C_RESET}"
-                echo "Use --help for usage information"
+                printf '%b%s%b\n' "$C_RED" "Unknown option: $1" "$C_RESET"
+                printf 'Use --help for usage information\n'
                 exit 1
                 ;;
         esac
     done
-    
-    # Display banner unless in quiet mode
+
     if [ "$quiet_mode" = false ]; then
         show_banner
         sleep 1
+    else
+        init_logs
     fi
-    
-    # Always run environment detection first
+
     detect_environment
     sleep 1
-    
-    # Execute all phases or specific ones based on arguments
+
     if [ "$run_all" = true ]; then
-        phase_system_discovery
-        sleep 1
-        phase_account_discovery
-        sleep 1
-        phase_process_discovery
-        sleep 1
-        phase_file_discovery
-        sleep 1
-        phase_credential_search
-        sleep 1
-        phase_registry_query
-        sleep 1
-        phase_network_discovery
-        sleep 1
-        phase_automated_collection
-        sleep 1
-        phase_persistence_recon
-        sleep 1
-        phase_ransomware_behavior
-        sleep 1
-        phase_eicar_test
-        sleep 1
+        phase_system_discovery;       sleep 1
+        phase_account_discovery;      sleep 1
+        phase_process_discovery;      sleep 1
+        phase_file_discovery;         sleep 1
+        phase_credential_search;      sleep 1
+        phase_defense_evasion_recon;  sleep 1
+        phase_network_discovery;      sleep 1
+        phase_automated_collection;   sleep 1
+        phase_persistence_recon;      sleep 1
+        phase_impact_simulation;      sleep 1
     else
-        # Run only the specified phases
         for phase in "${phases_to_run[@]}"; do
             case $phase in
-                1) phase_system_discovery ;;
-                2) phase_account_discovery ;;
-                3) phase_process_discovery ;;
-                4) phase_file_discovery ;;
-                5) phase_credential_search ;;
-                6) phase_registry_query ;;
-                7) phase_network_discovery ;;
-                8) phase_automated_collection ;;
-                9) phase_persistence_recon ;;
-                10) phase_ransomware_behavior ;;
-                11) phase_eicar_test ;;
+                1)  phase_system_discovery ;;
+                2)  phase_account_discovery ;;
+                3)  phase_process_discovery ;;
+                4)  phase_file_discovery ;;
+                5)  phase_credential_search ;;
+                6)  phase_defense_evasion_recon ;;
+                7)  phase_network_discovery ;;
+                8)  phase_automated_collection ;;
+                9)  phase_persistence_recon ;;
+                10) phase_impact_simulation ;;
                 *)
-                    print_error "Invalid phase number: $phase (valid range: 1-11)"
+                    print_error "Invalid phase number: $phase (valid range: 1-10)"
                     ;;
             esac
             sleep 1
         done
     fi
-    
-    # Generate and display final summary
+
     generate_summary
 }
 
 # ============================================================================
 # ERROR HANDLING
-# Catch script interruption and generate summary before exit
 # ============================================================================
 
-trap 'print_error "Script interrupted by user"; generate_summary; exit 1' INT TERM ERR
+trap 'print_error "Script interrupted by user"; generate_summary; exit 1' INT TERM
 
 # ============================================================================
-# SCRIPT ENTRY POINT
+# ENTRY POINT
 # ============================================================================
 
 main "$@"
